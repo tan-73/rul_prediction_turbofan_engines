@@ -15,6 +15,7 @@ The focus is operational trustworthiness and explainability, not only raw RMSE.
 - **Modes in app**:
   - `Baseline`
   - `Physics-Informed`
+  - `Compare (Baseline vs PI)`
 - **Reliability layer**:
   - temporal stability checks
   - physics-consistency checks
@@ -41,6 +42,12 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install streamlit tensorflow pandas numpy scikit-learn
 streamlit run app.py
+```
+
+For report plotting, also install:
+
+```powershell
+pip install matplotlib
 ```
 
 ### Input CSV format
@@ -103,6 +110,60 @@ Outputs:
 Colab run-all notebook:
 
 - `notebooks/cmapss_notebooks/attention_based_RUL/Colab_AttnPINN_RUL_FD001.ipynb`
+
+## Automated Ablation Report (Baseline / Baseline+RI / PI / PI+RI)
+
+Generate publication-ready tables and plots under `reports/`:
+
+```powershell
+python scripts\generate_ablation_report.py ^
+  --test-path D:\path\to\test_FD001.txt ^
+  --rul-path D:\path\to\RUL_FD001.txt ^
+  --reports-dir reports ^
+  --cat-threshold 20
+```
+
+Outputs:
+
+- `reports/tables/ablation_metrics.csv`
+- `reports/tables/ablation_per_engine_predictions.csv`
+- `reports/figures/ablation_summary_metrics.png`
+- `reports/figures/ri_error_scatter_baseline.png`
+- `reports/figures/ri_error_scatter_physics_informed.png`
+- `reports/run_manifest.json`
+
+## Side-by-Side Comparison Mode in App
+
+Run app:
+
+```powershell
+streamlit run app.py
+```
+
+In the UI, set **Model Mode** to `Compare (Baseline vs PI)` and run inference once.
+The app will display direct per-engine deltas:
+
+- predicted RUL delta (`PI - Baseline`)
+- RI delta (`PI - Baseline`)
+- decision delta (`SAME` / `CHANGED`)
+
+## Reproducibility Freeze
+
+Frozen artifact:
+
+- `reproducibility/fd001_ablation_freeze.json`
+
+Run with freeze config:
+
+```powershell
+python scripts\generate_ablation_report.py ^
+  --freeze-config reproducibility\fd001_ablation_freeze.json ^
+  --test-path D:\path\to\test_FD001.txt ^
+  --rul-path D:\path\to\RUL_FD001.txt
+```
+
+Note: the freeze config locks default experiment settings and checkpoint references.
+CLI flags override freeze defaults when both are provided.
 
 ## Notes
 

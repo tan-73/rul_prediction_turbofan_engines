@@ -1,0 +1,18 @@
+{
+  "dataset": "NASA C-MAPSS FD001",
+  "seed": 42,
+  "test_path": "data/test_FD001.txt",
+  "rul_path": "data/RUL_FD001.txt",
+  "reports_dir": "reports",
+  "catastrophic_threshold": 20.0,
+  "window_length": 30,
+  "num_test_windows": 5,
+  "ri_gating": {
+    "accept_threshold": 0.75,
+    "warning_threshold": 0.45
+  },
+  "model_checkpoints": {
+    "baseline": "notebooks/cmapss_notebooks/attention_based_RUL/saved_weights/FD001/FD001_early_rul_125_GRU_rmse_14_21",
+    "physics_informed": "saved_models/cmapss/FD001_attnpinn_trial1_val15.1246_rmse16.4634-1"
+  }
+}

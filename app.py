@@ -20,6 +20,7 @@ from inference.reliability import evaluate_reliability_log
 st.set_page_config(page_title="Aircraft Engine RUL Predictor", layout="wide")
 st.title("Aircraft Engine RUL Predictor")
 st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
+COMPARE_MODE = "Compare (Baseline vs PI)"
 
 
 @st.cache_resource
@@ -27,11 +28,30 @@ def get_model(model_mode: str):
     return load_attention_model(get_model_weights_path(model_mode))
 
 
+def build_reliability_df(result: dict) -> pd.DataFrame:
+    reliability_rows = []
+    for engine_id in result["engine_ids"]:
+        rel = result["per_engine_reliability"][engine_id]
+        reliability_rows.append(
+            {
+                "engine_id": engine_id,
+                "ri": rel["ri"],
+                "decision": rel["decision"],
+                "trusted_rul": rel["trusted_rul"],
+                "raw_pred_rul": result["per_engine_mean_rul"][engine_id],
+                "window_std": rel["window_std"],
+                "monotonic_violation_rate": rel["monotonic_violation_rate"],
+                "smoothness_ratio": rel["smoothness_ratio"],
+                "reason_codes": ", ".join(rel["reason_codes"]),
+            }
+        )
+    return pd.DataFrame(reliability_rows)
+
+
 uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
-model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed"], index=0)
+model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
 
 if uploaded_file is not None:
-    model = get_model(model_mode)
     file_bytes = uploaded_file.getvalue()
     file_signature = (uploaded_file.name, len(file_bytes), model_mode)
     if st.session_state.get("active_file_signature") != file_signature:
@@ -55,7 +75,23 @@ if uploaded_file is not None:
     if st.button("Run RUL Inference"):
         with st.spinner("Running attention model inference..."):
             try:
-                result = predict_rul_detailed_from_csv(io.BytesIO(st.session_state["active_file_bytes"]), model=model)
+                payload = io.BytesIO(st.session_state["active_file_bytes"])
+                if model_mode == COMPARE_MODE:
+                    baseline_model = get_model("Baseline")
+                    pi_model = get_model("Physics-Informed")
+                    baseline_result = predict_rul_detailed_from_csv(payload, model=baseline_model)
+                    payload.seek(0)
+                    pi_result = predict_rul_detailed_from_csv(payload, model=pi_model)
+                    st.session_state["compare_result"] = {
+                        "baseline": baseline_result,
+                        "pi": pi_result,
+                    }
+                    st.session_state.pop("inference_result", None)
+                else:
+                    model = get_model(model_mode)
+                    result = predict_rul_detailed_from_csv(payload, model=model)
+                    st.session_state["inference_result"] = result
+                    st.session_state.pop("compare_result", None)
             except FileNotFoundError as exc:
                 st.error(str(exc))
                 st.stop()
@@ -69,7 +105,72 @@ if uploaded_file is not None:
             except Exception as exc:
                 st.error(f"Unexpected error during inference: {exc}")
                 st.stop()
-        st.session_state["inference_result"] = result
+
+    if st.session_state.get("active_model_mode") == COMPARE_MODE and "compare_result" in st.session_state:
+        compare_result = st.session_state["compare_result"]
+        baseline_result = compare_result["baseline"]
+        pi_result = compare_result["pi"]
+        engine_ids = sorted(set(baseline_result["engine_ids"]) & set(pi_result["engine_ids"]))
+
+        rows = []
+        for engine_id in engine_ids:
+            b_rel = baseline_result["per_engine_reliability"][engine_id]
+            p_rel = pi_result["per_engine_reliability"][engine_id]
+            b_pred = float(baseline_result["per_engine_mean_rul"][engine_id])
+            p_pred = float(pi_result["per_engine_mean_rul"][engine_id])
+            b_ri = float(b_rel["ri"])
+            p_ri = float(p_rel["ri"])
+            rows.append(
+                {
+                    "engine_id": int(engine_id),
+                    "baseline_pred_rul": b_pred,
+                    "pi_pred_rul": p_pred,
+                    "pred_rul_delta_pi_minus_baseline": p_pred - b_pred,
+                    "baseline_ri": b_ri,
+                    "pi_ri": p_ri,
+                    "ri_delta_pi_minus_baseline": p_ri - b_ri,
+                    "baseline_decision": b_rel["decision"],
+                    "pi_decision": p_rel["decision"],
+                    "decision_delta": "CHANGED" if b_rel["decision"] != p_rel["decision"] else "SAME",
+                }
+            )
+        compare_df = pd.DataFrame(rows)
+
+        baseline_overall = float(baseline_result["overall_mean_rul"])
+        pi_overall = float(pi_result["overall_mean_rul"])
+        baseline_ri = float(baseline_result["overall_reliability_index"])
+        pi_ri = float(pi_result["overall_reliability_index"])
+        decision_change_rate = (
+            float((compare_df["decision_delta"] == "CHANGED").mean()) if not compare_df.empty else 0.0
+        )
+
+        st.subheader("Side-by-Side Baseline vs PI")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Baseline Overall RUL", f"{baseline_overall:.2f}")
+        c2.metric("PI Overall RUL", f"{pi_overall:.2f}", delta=f"{pi_overall - baseline_overall:.2f}")
+        c3.metric("Baseline Overall RI", f"{baseline_ri:.2f}")
+        c4.metric("PI Overall RI", f"{pi_ri:.2f}", delta=f"{pi_ri - baseline_ri:.2f}")
+        st.caption(f"Decision change rate across engines: {decision_change_rate:.2%}")
+
+        if not compare_df.empty:
+            st.dataframe(compare_df, use_container_width=True)
+            st.download_button(
+                "Download Baseline vs PI Comparison (CSV)",
+                data=compare_df.to_csv(index=False).encode("utf-8"),
+                file_name="baseline_vs_pi_comparison.csv",
+                mime="text/csv",
+            )
+            st.bar_chart(compare_df.set_index("engine_id")[["baseline_pred_rul", "pi_pred_rul"]])
+            st.bar_chart(compare_df.set_index("engine_id")[["pred_rul_delta_pi_minus_baseline"]])
+            st.bar_chart(compare_df["decision_delta"].value_counts().rename_axis("decision_delta").to_frame("count"))
+
+        compare_tab_baseline, compare_tab_pi = st.tabs(["Baseline Details", "PI Details"])
+        with compare_tab_baseline:
+            baseline_reliability_df = build_reliability_df(baseline_result)
+            st.dataframe(baseline_reliability_df, use_container_width=True)
+        with compare_tab_pi:
+            pi_reliability_df = build_reliability_df(pi_result)
+            st.dataframe(pi_reliability_df, use_container_width=True)
 
     if "inference_result" in st.session_state:
         result = st.session_state["inference_result"]
@@ -103,23 +204,7 @@ if uploaded_file is not None:
                 st.bar_chart(result_df.set_index("engine_id")["predicted_rul"])
 
         with reliability_tab:
-            reliability_rows = []
-            for engine_id in result["engine_ids"]:
-                rel = result["per_engine_reliability"][engine_id]
-                reliability_rows.append(
-                    {
-                        "engine_id": engine_id,
-                        "ri": rel["ri"],
-                        "decision": rel["decision"],
-                        "trusted_rul": rel["trusted_rul"],
-                        "raw_pred_rul": result["per_engine_mean_rul"][engine_id],
-                        "window_std": rel["window_std"],
-                        "monotonic_violation_rate": rel["monotonic_violation_rate"],
-                        "smoothness_ratio": rel["smoothness_ratio"],
-                        "reason_codes": ", ".join(rel["reason_codes"]),
-                    }
-                )
-            reliability_df = pd.DataFrame(reliability_rows)
+            reliability_df = build_reliability_df(result)
             export_df = reliability_df[["engine_id", "raw_pred_rul", "ri", "decision", "trusted_rul"]].rename(
                 columns={"raw_pred_rul": "predicted_rul"}
             )
