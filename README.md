@@ -1,29 +1,40 @@
-# Data-Driven Remaining Useful Life (RUL) Prediction
+# Aircraft Engine RUL System (Attention + Reliability Gating + PI Mode)
 
-This repository contains reproducible experiments for Remaining Useful Life (RUL) prediction on C-MAPSS, including classical ML and deep learning approaches.
+This repository contains an end-to-end aircraft engine prognostics prototype for NASA C-MAPSS:
 
-Project page: [biswajitsahoo1111.github.io/rul_codes_open](https://biswajitsahoo1111.github.io/rul_codes_open/)
+- attention-based RUL inference (baseline checkpoint)
+- physics-informed checkpoint support (PI mode)
+- reliability-aware gating (`ACCEPT` / `WARN` / `REJECT`)
+- streaming-style replay for cycle-by-cycle behavior inspection
 
-## Repository Structure
+The focus is operational trustworthiness and explainability, not only raw RMSE.
 
-- `notebooks/` — original notebooks for preprocessing, training, and result reproduction
-- `saved_models/` — pretrained model artifacts used by notebooks
-- `inference/attention_model.py` — inference-focused module for pretrained attention-based GRU model
-- `app.py` — Streamlit demo app for aircraft-engine RUL prediction
-- `examples/sample_cmapss_engine.csv` — tiny demo CSV input
-- `README_APP.md` — focused app usage notes
+## Current Scope
 
-## Streamlit Demo App (Inference Only)
+- **Inference model family**: attention-based seq2seq GRU (unchanged architecture)
+- **Modes in app**:
+  - `Baseline`
+  - `Physics-Informed`
+- **Reliability layer**:
+  - temporal stability checks
+  - physics-consistency checks
+  - combined Reliability Index (RI)
+  - gated decision policy
 
-The demo app:
-- loads the existing pretrained attention-based model weights
-- reuses the same preprocessing approach used in the repository notebooks
-- runs inference on uploaded sensor CSV files
-- shows prediction + lightweight analytics/EDA visuals
+## Repository Layout
 
-### Run Locally
+- `app.py` — Streamlit UI
+- `inference/attention_model.py` — model loading, preprocessing, inference, replay
+- `inference/reliability.py` — RI computation and gating logic
+- `scripts/evaluate_reliability.py` — CLI reliability evaluation
+- `training/train_physics_informed.py` — baseline + PI retraining pipeline
+- `examples/sample_cmapss_engine.csv` — single-engine demo input
+- `examples/sample_cmapss_engine_dual.csv` — multi-engine demo input
+- `saved_models/cmapss/` — PI checkpoint files from retraining
+- `notebooks/cmapss_notebooks/attention_based_RUL/Colab_AttnPINN_RUL_FD001.ipynb` — run-all Colab training notebook
+- `notebooks/cmapss_notebooks/attention_based_RUL/saved_weights/FD001/` — baseline FD001 checkpoint
 
-From project root:
+## Quick Start (Local App)
 
 ```powershell
 python -m venv .venv
@@ -32,34 +43,69 @@ pip install streamlit tensorflow pandas numpy scikit-learn
 streamlit run app.py
 ```
 
-### Input Format
+### Input CSV format
 
 Upload either:
-- named C-MAPSS-like columns:
+
+- named C-MAPSS-style columns:
   - `unit_nr`, `time_cycles`, `op_setting_1`, `op_setting_2`, `op_setting_3`, `s_1` ... `s_21`
 - or at least 26 raw columns in original C-MAPSS ordering
 
-Quick test file:
+Use:
+
 - `examples/sample_cmapss_engine.csv`
+- `examples/sample_cmapss_engine_dual.csv`
+
+## Reliability Gating Workflow
+
+The app computes per-engine RI and decision:
+
+- `ACCEPT`: prediction trusted
+- `WARN`: degraded confidence
+- `REJECT`: conservative fallback policy
+
+The app also supports:
+
+- prediction log download (`engine_id,predicted_rul,ri,decision,trusted_rul`)
+- optional ground-truth upload (`engine_id,true_rul`) for on-the-fly evaluation
+- streaming replay mode for cycle-by-cycle behavior
+
+## Reliability Evaluation CLI
+
+```powershell
+python scripts/evaluate_reliability.py --csv path\to\predictions.csv --cat-threshold 20
+```
+
+Expected CSV columns:
+
+- required: `true_rul`, `predicted_rul`, `ri`
+- optional: `decision`
+
+## Physics-Informed Retraining
+
+Local retraining script:
+
+```powershell
+python training\train_physics_informed.py ^
+  --train-path D:\path\to\train_FD001.txt ^
+  --test-path D:\path\to\test_FD001.txt ^
+  --rul-path D:\path\to\RUL_FD001.txt ^
+  --out-dir saved_models\cmapss\attn_pi_fd001
+```
+
+Outputs:
+
+- `train_history.csv`
+- `test_metrics.csv`
+- `config.json`
+- TensorFlow checkpoint files
+
+Colab run-all notebook:
+
+- `notebooks/cmapss_notebooks/attention_based_RUL/Colab_AttnPINN_RUL_FD001.ipynb`
 
 ## Notes
 
-- Existing notebooks are kept intact.
-- This app is for demo/prototyping; not for production maintenance decisions.
-
-## Citation
-
-For attribution, cite this project as:
-
-```bibtex
-@misc{Sahoo_Data-Driven_Remaining_Useful_2020,
-  author = {Sahoo, Biswajit},
-  doi = {10.5281/zenodo.5890595},
-  month = {9},
-  title = {Data-Driven Remaining Useful Life (RUL) Prediction},
-  url = {https://biswajitsahoo1111.github.io/rul_codes_open/},
-  year = {2020}
-}
-```
-
-Please cite original datasets separately.
+- Intended for research prototyping and demonstration.
+- Not a certified maintenance decision system.
+- Baseline and PI modes are both retained for ablation and operational comparison.

@@ -8,10 +8,13 @@ import streamlit as st
 
 from inference.attention_model import (
     RAW_COLUMN_NAMES,
+    get_model_weights_path,
     load_attention_model,
     maintenance_status,
     predict_rul_detailed_from_csv,
+    simulate_realtime_engine_from_df,
 )
+from inference.reliability import evaluate_reliability_log
 
 
 st.set_page_config(page_title="Aircraft Engine RUL Predictor", layout="wide")
@@ -20,19 +23,28 @@ st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
 
 
 @st.cache_resource
-def get_model():
-    return load_attention_model()
+def get_model(model_mode: str):
+    return load_attention_model(get_model_weights_path(model_mode))
 
 
 uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
+model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed"], index=0)
 
 if uploaded_file is not None:
+    model = get_model(model_mode)
+    file_bytes = uploaded_file.getvalue()
+    file_signature = (uploaded_file.name, len(file_bytes), model_mode)
+    if st.session_state.get("active_file_signature") != file_signature:
+        st.session_state["active_file_signature"] = file_signature
+        st.session_state["active_file_bytes"] = file_bytes
+        st.session_state["active_model_mode"] = model_mode
+        st.session_state.pop("inference_result", None)
+
     try:
-        preview_bytes = uploaded_file.getvalue()
-        preview_df = pd.read_csv(io.BytesIO(preview_bytes), nrows=10)
+        preview_df = pd.read_csv(io.BytesIO(file_bytes), nrows=10)
     except Exception:
         try:
-            preview_df = pd.read_csv(io.BytesIO(uploaded_file.getvalue()), sep=r"\s+", engine="python", nrows=10)
+            preview_df = pd.read_csv(io.BytesIO(file_bytes), sep=r"\s+", engine="python", nrows=10)
         except Exception as exc:
             st.error(f"Could not parse uploaded file for preview: {exc}")
             st.stop()
@@ -43,8 +55,7 @@ if uploaded_file is not None:
     if st.button("Run RUL Inference"):
         with st.spinner("Running attention model inference..."):
             try:
-                model = get_model()
-                result = predict_rul_detailed_from_csv(io.BytesIO(uploaded_file.getvalue()), model=model)
+                result = predict_rul_detailed_from_csv(io.BytesIO(st.session_state["active_file_bytes"]), model=model)
             except FileNotFoundError as exc:
                 st.error(str(exc))
                 st.stop()
@@ -58,21 +69,29 @@ if uploaded_file is not None:
             except Exception as exc:
                 st.error(f"Unexpected error during inference: {exc}")
                 st.stop()
+        st.session_state["inference_result"] = result
 
+    if "inference_result" in st.session_state:
+        result = st.session_state["inference_result"]
         predictions = result["per_engine_mean_rul"]
         overall_rul = float(result["overall_mean_rul"])
+        overall_ri = float(result["overall_reliability_index"])
         raw_df = result["raw_df"]
 
         st.subheader("Predicted Remaining Useful Life (RUL)")
-        metric_col_1, metric_col_2, metric_col_3 = st.columns(3)
+        metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
         metric_col_1.metric("Overall Predicted RUL", f"{overall_rul:.2f}")
         metric_col_2.metric("Fleet Engines", len(predictions))
         metric_col_3.metric("Status", maintenance_status(overall_rul))
+        metric_col_4.metric("Reliability Index (RI)", f"{overall_ri:.2f}")
+        st.caption(f"Active model mode: {st.session_state.get('active_model_mode', model_mode)}")
 
         normalized = max(0.0, min(1.0, overall_rul / 125.0))
         st.progress(normalized, text="RUL score normalized to 0-125")
 
-        overview_tab, insights_tab = st.tabs(["Prediction Overview", "Advanced Insights"])
+        overview_tab, reliability_tab, insights_tab = st.tabs(
+            ["Prediction Overview", "Reliability Gating", "Advanced Insights"]
+        )
 
         with overview_tab:
             result_df = pd.DataFrame(
@@ -82,6 +101,89 @@ if uploaded_file is not None:
             st.dataframe(result_df, use_container_width=True)
             if len(result_df) > 1:
                 st.bar_chart(result_df.set_index("engine_id")["predicted_rul"])
+
+        with reliability_tab:
+            reliability_rows = []
+            for engine_id in result["engine_ids"]:
+                rel = result["per_engine_reliability"][engine_id]
+                reliability_rows.append(
+                    {
+                        "engine_id": engine_id,
+                        "ri": rel["ri"],
+                        "decision": rel["decision"],
+                        "trusted_rul": rel["trusted_rul"],
+                        "raw_pred_rul": result["per_engine_mean_rul"][engine_id],
+                        "window_std": rel["window_std"],
+                        "monotonic_violation_rate": rel["monotonic_violation_rate"],
+                        "smoothness_ratio": rel["smoothness_ratio"],
+                        "reason_codes": ", ".join(rel["reason_codes"]),
+                    }
+                )
+            reliability_df = pd.DataFrame(reliability_rows)
+            export_df = reliability_df[["engine_id", "raw_pred_rul", "ri", "decision", "trusted_rul"]].rename(
+                columns={"raw_pred_rul": "predicted_rul"}
+            )
+            st.subheader("Reliability-Aware Gating Summary")
+            st.dataframe(reliability_df, use_container_width=True)
+            st.download_button(
+                "Download Prediction Reliability Log (CSV)",
+                data=export_df.to_csv(index=False).encode("utf-8"),
+                file_name="prediction_reliability_log.csv",
+                mime="text/csv",
+            )
+
+            decision_counts = reliability_df["decision"].value_counts().rename_axis("decision").to_frame("count")
+            st.bar_chart(decision_counts)
+
+            st.subheader("Reliability Evaluation (Optional Ground Truth)")
+            gt_file = st.file_uploader(
+                "Upload ground truth CSV with columns: engine_id,true_rul",
+                type=["csv"],
+                key="gt_eval_file",
+            )
+            if gt_file is not None:
+                try:
+                    gt_df = pd.read_csv(gt_file)
+                    required_gt = {"engine_id", "true_rul"}
+                    if not required_gt.issubset(set(gt_df.columns)):
+                        st.error("Ground truth CSV must contain columns: engine_id,true_rul")
+                    else:
+                        eval_df = export_df.merge(gt_df[["engine_id", "true_rul"]], on="engine_id", how="inner")
+                        if eval_df.empty:
+                            st.warning("No overlapping engine_id values between predictions and ground truth.")
+                        else:
+                            eval_df["abs_error"] = (eval_df["predicted_rul"] - eval_df["true_rul"]).abs()
+                            eval_metrics = evaluate_reliability_log(eval_df, catastrophic_error_threshold=20.0)
+                            e1, e2, e3, e4 = st.columns(4)
+                            e1.metric("Mean Absolute Error", f"{eval_metrics['mean_abs_error']:.2f}")
+                            e2.metric("RI-Error Correlation", f"{eval_metrics['ri_error_correlation']:.3f}")
+                            e3.metric("Catastrophic Error Rate", f"{eval_metrics['catastrophic_rate']:.2%}")
+                            e4.metric("Accept Rate", f"{eval_metrics.get('accept_rate', 0.0):.2%}")
+
+                            st.scatter_chart(eval_df.set_index("ri")[["abs_error"]])
+                            st.dataframe(eval_df, use_container_width=True)
+                except Exception as exc:
+                    st.error(f"Could not evaluate reliability metrics: {exc}")
+
+            st.subheader("Streaming Replay (Cycle-by-Cycle)")
+            stream_engine = st.selectbox(
+                "Engine for streaming replay",
+                options=result["engine_ids"],
+                index=0,
+                key="stream_engine",
+            )
+            stream_step = st.slider("Replay step (cycles)", min_value=1, max_value=5, value=1)
+            if st.button("Run Streaming Replay"):
+                with st.spinner("Simulating real-time RUL updates..."):
+                    stream_df = simulate_realtime_engine_from_df(
+                        raw_df=raw_df,
+                        engine_id=int(stream_engine),
+                        model=model,
+                        step=int(stream_step),
+                    )
+                st.dataframe(stream_df, use_container_width=True)
+                st.line_chart(stream_df.set_index("time_cycles")[["predicted_rul", "trusted_rul"]])
+                st.line_chart(stream_df.set_index("time_cycles")[["reliability_index"]])
 
         with insights_tab:
             with st.expander("Advanced Insights", expanded=True):
@@ -108,6 +210,7 @@ if uploaded_file is not None:
                 )
 
                 selected_window_preds = result["per_engine_window_rul"][selected_engine]
+                selected_rel = result["per_engine_reliability"][selected_engine]
                 window_df = pd.DataFrame(
                     {
                         "window_index": np.arange(1, len(selected_window_preds) + 1),
@@ -118,9 +221,14 @@ if uploaded_file is not None:
                 st.subheader(f"Engine {selected_engine}: Window-Level RUL")
                 st.line_chart(window_df.set_index("window_index")["predicted_rul"])
                 st.caption(
-                    f"Uncertainty summary — mean: {np.mean(selected_window_preds):.2f}, "
+                    f"Uncertainty summary - mean: {np.mean(selected_window_preds):.2f}, "
                     f"min: {np.min(selected_window_preds):.2f}, max: {np.max(selected_window_preds):.2f}, "
                     f"std: {np.std(selected_window_preds):.2f}"
+                )
+                st.caption(
+                    f"Reliability decision: {selected_rel['decision']} | "
+                    f"RI={selected_rel['ri']:.2f} | "
+                    f"Reasons={', '.join(selected_rel['reason_codes'])}"
                 )
 
                 attention = result["per_engine_last_attention"][selected_engine]

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from inference.reliability import compute_reliability_index, gate_prediction, reason_codes
 
 
 WINDOW_LENGTH = 30
@@ -20,14 +21,23 @@ NUM_HIDDENS = 64
 NUM_LAYERS = 2
 ATTENTION_SIZE = 32
 RANDOM_SEED = 42
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 FD001_WEIGHTS_PATH = (
-    Path("notebooks")
+    REPO_ROOT
+    / "notebooks"
     / "cmapss_notebooks"
     / "attention_based_RUL"
     / "saved_weights"
     / "FD001"
     / "FD001_early_rul_125_GRU_rmse_14_21"
+)
+
+FD001_PI_WEIGHTS_PATH = (
+    REPO_ROOT
+    / "saved_models"
+    / "cmapss"
+    / "FD001_attnpinn_trial1_val15.1246_rmse16.4634-1"
 )
 
 EXPECTED_NAMED_COLUMNS = [
@@ -239,7 +249,8 @@ def load_attention_model(weights_path: Union[str, Path] = FD001_WEIGHTS_PATH) ->
     random.seed(RANDOM_SEED)
     np.random.seed(RANDOM_SEED)
     model_path = Path(weights_path)
-    if not model_path.exists() and not model_path.with_suffix(".index").exists():
+    index_path = Path(f"{model_path}.index")
+    if not model_path.exists() and not index_path.exists():
         raise FileNotFoundError(f"Pretrained weights not found at: {model_path}")
 
     encoder = Seq2SeqEncoder(num_hiddens=NUM_HIDDENS, num_layers=NUM_LAYERS)
@@ -259,6 +270,15 @@ def load_attention_model(weights_path: Union[str, Path] = FD001_WEIGHTS_PATH) ->
         status.expect_partial()
 
     return net
+
+
+def get_model_weights_path(model_mode: str) -> Path:
+    mode = model_mode.strip().lower()
+    if mode == "baseline":
+        return FD001_WEIGHTS_PATH
+    if mode in {"physics-informed", "physics_informed", "pi"}:
+        return FD001_PI_WEIGHTS_PATH
+    raise ValueError(f"Unsupported model mode: {model_mode}")
 
 
 def preprocess_csv_for_inference(
@@ -362,12 +382,32 @@ def predict_rul_detailed_from_csv(
     preds_for_each_engine = np.split(rul_pred, np.cumsum(num_test_windows_list)[:-1])
     attention_per_engine = np.split(attention_weights, np.cumsum(num_test_windows_list)[:-1])
 
-    per_engine_mean = {int(engine_id): float(np.mean(values)) for engine_id, values in zip(engine_ids, preds_for_each_engine)}
-    per_engine_windows = {int(engine_id): [float(v) for v in values] for engine_id, values in zip(engine_ids, preds_for_each_engine)}
+    per_engine_mean = {
+        int(engine_id): float(np.mean(values)) for engine_id, values in zip(engine_ids, preds_for_each_engine)
+    }
+    per_engine_windows = {
+        int(engine_id): [float(v) for v in values] for engine_id, values in zip(engine_ids, preds_for_each_engine)
+    }
     per_engine_attention_last = {
         int(engine_id): attention_values[-1].tolist()
         for engine_id, attention_values in zip(engine_ids, attention_per_engine)
     }
+    per_engine_reliability: Dict[int, Dict[str, object]] = {}
+    decisions_numeric: List[float] = []
+
+    for engine_id, window_preds in per_engine_windows.items():
+        ri_metrics = compute_reliability_index(window_preds, early_rul=float(EARLY_RUL))
+        gating = gate_prediction(per_engine_mean[engine_id], ri_metrics["ri"], window_preds)
+        combined = {
+            **ri_metrics,
+            **gating,
+            "reason_codes": reason_codes(ri_metrics),
+        }
+        per_engine_reliability[engine_id] = combined
+        decisions_numeric.append({"ACCEPT": 1.0, "WARN": 0.5, "REJECT": 0.0}[combined["decision"]])
+
+    overall_reliability_index = float(np.mean([v["ri"] for v in per_engine_reliability.values()]))
+    overall_decision_score = float(np.mean(decisions_numeric)) if decisions_numeric else 0.0
 
     return {
         "raw_df": raw_df,
@@ -376,8 +416,49 @@ def predict_rul_detailed_from_csv(
         "per_engine_mean_rul": per_engine_mean,
         "per_engine_window_rul": per_engine_windows,
         "per_engine_last_attention": per_engine_attention_last,
+        "per_engine_reliability": per_engine_reliability,
+        "overall_reliability_index": overall_reliability_index,
+        "overall_decision_score": overall_decision_score,
         "overall_mean_rul": float(np.mean(list(per_engine_mean.values()))),
     }
+
+
+def simulate_realtime_engine_from_df(
+    raw_df: pd.DataFrame,
+    engine_id: int,
+    model: EncoderDecoder,
+    min_cycles: int = WINDOW_LENGTH,
+    step: int = 1,
+) -> pd.DataFrame:
+    if engine_id not in set(raw_df["unit_nr"].astype(int).unique()):
+        raise ValueError(f"Engine {engine_id} not found in input data.")
+
+    engine_df = raw_df[raw_df["unit_nr"].astype(int) == int(engine_id)].sort_values("time_cycles")
+    if len(engine_df) < min_cycles:
+        raise ValueError(f"Engine {engine_id} has only {len(engine_df)} rows. Need at least {min_cycles}.")
+
+    rows: List[Dict[str, object]] = []
+    for end_idx in range(min_cycles, len(engine_df) + 1, max(step, 1)):
+        partial = engine_df.iloc[:end_idx].copy()
+        payload = io.StringIO()
+        partial.to_csv(payload, index=False)
+        payload.seek(0)
+
+        result = predict_rul_detailed_from_csv(payload, model=model)
+        rel = result["per_engine_reliability"][int(engine_id)]
+        rows.append(
+            {
+                "time_cycles": int(partial["time_cycles"].max()),
+                "predicted_rul": float(result["per_engine_mean_rul"][int(engine_id)]),
+                "trusted_rul": float(rel["trusted_rul"]),
+                "reliability_index": float(rel["ri"]),
+                "decision": rel["decision"],
+                "window_std": float(rel["window_std"]),
+                "monotonic_violation_rate": float(rel["monotonic_violation_rate"]),
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def maintenance_status(predicted_rul: float, threshold: float = 40.0) -> str:

@@ -17,6 +17,11 @@ pip install streamlit tensorflow pandas numpy scikit-learn
 streamlit run app.py
 ```
 
+On the app page, choose **Model Mode**:
+
+- `Baseline` (original FD001 attention checkpoint)
+- `Physics-Informed` (uploaded PI checkpoint from retraining)
+
 ## Expected CSV format
 
 The app supports either of these input styles:
@@ -52,3 +57,37 @@ After inference, the app also shows an **Advanced Insights** section with:
 - selected sensor trend lines over cycles
 - cycle continuity and data-quality checks
 - sensor correlation matrix and histogram snapshot (EDA-style)
+
+## Reliability-aware gating
+
+The app now adds an operational reliability layer on top of model predictions:
+
+- computes a **Reliability Index (RI)** from:
+  - temporal stability across overlapping window predictions
+  - physics-consistency checks (monotonicity, smoothness, boundary sanity)
+- gates usage of predictions as:
+  - `ACCEPT`
+  - `WARN`
+  - `REJECT` (with conservative fallback RUL)
+
+This gating layer does not change model architecture or retrain weights. It controls how predictions are trusted operationally.
+
+## Streaming-style demonstration
+
+In the **Reliability Gating** tab, a cycle-by-cycle replay simulates real-time operation:
+
+- runs rolling inference as cycles arrive
+- updates RI and decision state each step
+- visualizes raw vs trusted RUL trends over time
+
+## Reliability evaluation workflow
+
+In the **Reliability Gating** tab:
+
+- Download model output log as CSV (`engine_id,predicted_rul,ri,decision,trusted_rul`)
+- Upload optional ground-truth CSV (`engine_id,true_rul`)
+- App computes:
+  - mean absolute error
+  - RI-error correlation
+  - catastrophic error rate (|error| > 20)
+  - accept-rate under gating
