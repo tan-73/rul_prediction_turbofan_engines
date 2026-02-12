@@ -64,6 +64,8 @@ desktop.ini
 logs/
 tmp/
 temp/
+reports/
+reports/**
 
 TODO.md
 IMPLEMENTATION.md

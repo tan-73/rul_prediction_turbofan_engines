@@ -11,6 +11,12 @@ This app loads the existing pretrained attention-based GRU model from this repos
 pip install streamlit tensorflow pandas numpy scikit-learn
 ```
 
+For richer dashboard charts:
+
+```bash
+pip install plotly
+```
+
 3. Run:
 
 ```bash
@@ -21,6 +27,7 @@ On the app page, choose **Model Mode**:
 
 - `Baseline` (original FD001 attention checkpoint)
 - `Physics-Informed` (uploaded PI checkpoint from retraining)
+- `Compare (Baseline vs PI)` (side-by-side in one run)
 
 ## Expected CSV format
 
@@ -48,6 +55,20 @@ The app runs the pretrained attention model and returns:
 
 This is for demonstration/prototyping and not intended for production maintenance decisions.
 
+## Curated replay scenarios
+
+The repository includes curated scenario files for demo playback:
+
+- `examples/scenarios/scenario_stable_behavior.csv`
+- `examples/scenarios/scenario_noisy_behavior.csv`
+- `examples/scenarios/scenario_rapid_degradation.csv`
+
+Regenerate scenarios:
+
+```bash
+python scripts/generate_demo_scenarios.py
+```
+
 ## Dashboard visuals included
 
 After inference, the app also shows an **Advanced Insights** section with:
@@ -57,6 +78,14 @@ After inference, the app also shows an **Advanced Insights** section with:
 - selected sensor trend lines over cycles
 - cycle continuity and data-quality checks
 - sensor correlation matrix and histogram snapshot (EDA-style)
+
+Additional compare/reliability visuals now include:
+
+- Baseline vs PI grouped RUL charts
+- PI-minus-Baseline delta scatter
+- decision distribution donut chart
+- RI vs raw prediction scatter (point size by window std)
+- enhanced streaming replay lines with decision-aware coloring
 
 ## Reliability-aware gating
 

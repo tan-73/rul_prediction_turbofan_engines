@@ -44,10 +44,10 @@ pip install streamlit tensorflow pandas numpy scikit-learn
 streamlit run app.py
 ```
 
-For report plotting, also install:
+For report plotting and colorful interactive dashboards, also install:
 
 ```powershell
-pip install matplotlib
+pip install matplotlib plotly
 ```
 
 ### Input CSV format
@@ -62,6 +62,15 @@ Use:
 
 - `examples/sample_cmapss_engine.csv`
 - `examples/sample_cmapss_engine_dual.csv`
+- `examples/scenarios/scenario_stable_behavior.csv`
+- `examples/scenarios/scenario_noisy_behavior.csv`
+- `examples/scenarios/scenario_rapid_degradation.csv`
+
+Generate/refresh curated replay scenarios:
+
+```powershell
+python scripts\generate_demo_scenarios.py
+```
 
 ## Reliability Gating Workflow
 
@@ -147,6 +156,14 @@ The app will display direct per-engine deltas:
 - RI delta (`PI - Baseline`)
 - decision delta (`SAME` / `CHANGED`)
 
+The dashboard now includes additional colorful visual diagnostics (Plotly-enabled):
+
+- grouped Baseline vs PI bar comparison
+- delta scatter (`RI delta` vs `RUL delta`) with decision-change coloring
+- decision donut charts
+- RI vs raw prediction scatter with uncertainty sizing
+- interactive streaming replay trajectories
+
 ## Reproducibility Freeze
 
 Frozen artifact:
@@ -160,6 +177,12 @@ python scripts\generate_ablation_report.py ^
   --freeze-config reproducibility\fd001_ablation_freeze.json ^
   --test-path D:\path\to\test_FD001.txt ^
   --rul-path D:\path\to\RUL_FD001.txt
+```
+
+One-command convention (if dataset is placed at freeze-default paths):
+
+```powershell
+python scripts\generate_ablation_report.py --freeze-config reproducibility\fd001_ablation_freeze.json
 ```
 
 Note: the freeze config locks default experiment settings and checkpoint references.

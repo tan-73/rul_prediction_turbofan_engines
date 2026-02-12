@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+try:
+    import plotly.express as px
+except ImportError:  # pragma: no cover - optional visualization dependency.
+    px = None
 
 from inference.attention_model import (
     RAW_COLUMN_NAMES,
@@ -21,6 +26,32 @@ st.set_page_config(page_title="Aircraft Engine RUL Predictor", layout="wide")
 st.title("Aircraft Engine RUL Predictor")
 st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
 COMPARE_MODE = "Compare (Baseline vs PI)"
+DECISION_COLORS = {"ACCEPT": "#2ca02c", "WARN": "#ff7f0e", "REJECT": "#d62728", "RAW": "#1f77b4"}
+
+
+def _show_plotly_hint_once() -> None:
+    if px is None:
+        st.info("Install `plotly` for colorful interactive charts: `pip install plotly`")
+
+
+def _render_decision_distribution(df: pd.DataFrame, column: str = "decision") -> None:
+    counts = df[column].value_counts().rename_axis(column).to_frame("count").reset_index()
+    if counts.empty:
+        return
+    if px is not None:
+        fig = px.pie(
+            counts,
+            names=column,
+            values="count",
+            color=column,
+            color_discrete_map=DECISION_COLORS,
+            hole=0.45,
+            title="Decision Distribution",
+        )
+        fig.update_traces(textposition="inside", textinfo="percent+label")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.bar_chart(counts.set_index(column)["count"])
 
 
 @st.cache_resource
@@ -50,6 +81,25 @@ def build_reliability_df(result: dict) -> pd.DataFrame:
 
 uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
 model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
+scenario_dir = Path("examples") / "scenarios"
+with st.expander("Demo Scenarios", expanded=False):
+    st.caption("Curated replay scenario files for quick testing.")
+    scenario_map = {
+        "Stable behavior": scenario_dir / "scenario_stable_behavior.csv",
+        "Noisy behavior": scenario_dir / "scenario_noisy_behavior.csv",
+        "Rapid degradation": scenario_dir / "scenario_rapid_degradation.csv",
+    }
+    for label, path in scenario_map.items():
+        if path.exists():
+            st.download_button(
+                f"Download {label}",
+                data=path.read_bytes(),
+                file_name=path.name,
+                mime="text/csv",
+                key=f"dl_{path.name}",
+            )
+        else:
+            st.write(f"{label}: `{path}` not found yet.")
 
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
@@ -160,9 +210,36 @@ if uploaded_file is not None:
                 file_name="baseline_vs_pi_comparison.csv",
                 mime="text/csv",
             )
-            st.bar_chart(compare_df.set_index("engine_id")[["baseline_pred_rul", "pi_pred_rul"]])
-            st.bar_chart(compare_df.set_index("engine_id")[["pred_rul_delta_pi_minus_baseline"]])
-            st.bar_chart(compare_df["decision_delta"].value_counts().rename_axis("decision_delta").to_frame("count"))
+            if px is not None:
+                fig_compare = px.bar(
+                    compare_df.melt(
+                        id_vars=["engine_id"],
+                        value_vars=["baseline_pred_rul", "pi_pred_rul"],
+                        var_name="mode",
+                        value_name="predicted_rul",
+                    ),
+                    x="engine_id",
+                    y="predicted_rul",
+                    color="mode",
+                    barmode="group",
+                    title="Baseline vs PI Predicted RUL",
+                    color_discrete_sequence=["#4c78a8", "#f58518"],
+                )
+                st.plotly_chart(fig_compare, use_container_width=True)
+                fig_delta = px.scatter(
+                    compare_df,
+                    x="ri_delta_pi_minus_baseline",
+                    y="pred_rul_delta_pi_minus_baseline",
+                    color="decision_delta",
+                    title="PI-Baseline Delta Map",
+                    color_discrete_map={"SAME": "#1f77b4", "CHANGED": "#d62728"},
+                )
+                st.plotly_chart(fig_delta, use_container_width=True)
+            else:
+                _show_plotly_hint_once()
+                st.bar_chart(compare_df.set_index("engine_id")[["baseline_pred_rul", "pi_pred_rul"]])
+                st.bar_chart(compare_df.set_index("engine_id")[["pred_rul_delta_pi_minus_baseline"]])
+            _render_decision_distribution(compare_df.rename(columns={"decision_delta": "decision"}), column="decision")
 
         compare_tab_baseline, compare_tab_pi = st.tabs(["Baseline Details", "PI Details"])
         with compare_tab_baseline:
@@ -174,6 +251,8 @@ if uploaded_file is not None:
 
     if "inference_result" in st.session_state:
         result = st.session_state["inference_result"]
+        active_mode = st.session_state.get("active_model_mode", model_mode)
+        model = get_model(active_mode)
         predictions = result["per_engine_mean_rul"]
         overall_rul = float(result["overall_mean_rul"])
         overall_ri = float(result["overall_reliability_index"])
@@ -201,7 +280,21 @@ if uploaded_file is not None:
             st.subheader("Per Engine Prediction")
             st.dataframe(result_df, use_container_width=True)
             if len(result_df) > 1:
-                st.bar_chart(result_df.set_index("engine_id")["predicted_rul"])
+                if px is not None:
+                    fig = px.bar(
+                        result_df.sort_values("predicted_rul", ascending=False),
+                        x="engine_id",
+                        y="predicted_rul",
+                        color="predicted_rul",
+                        color_continuous_scale="Turbo",
+                        title="Per Engine RUL (Color Encoded)",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    box_fig = px.box(result_df, y="predicted_rul", points="all", title="Fleet RUL Spread")
+                    st.plotly_chart(box_fig, use_container_width=True)
+                else:
+                    _show_plotly_hint_once()
+                    st.bar_chart(result_df.set_index("engine_id")["predicted_rul"])
 
         with reliability_tab:
             reliability_df = build_reliability_df(result)
@@ -217,8 +310,19 @@ if uploaded_file is not None:
                 mime="text/csv",
             )
 
-            decision_counts = reliability_df["decision"].value_counts().rename_axis("decision").to_frame("count")
-            st.bar_chart(decision_counts)
+            _render_decision_distribution(reliability_df, column="decision")
+            if px is not None:
+                scatter = px.scatter(
+                    reliability_df,
+                    x="ri",
+                    y="raw_pred_rul",
+                    color="decision",
+                    size="window_std",
+                    hover_data=["engine_id", "trusted_rul"],
+                    color_discrete_map=DECISION_COLORS,
+                    title="Reliability vs Raw Prediction",
+                )
+                st.plotly_chart(scatter, use_container_width=True)
 
             st.subheader("Reliability Evaluation (Optional Ground Truth)")
             gt_file = st.file_uploader(
@@ -245,7 +349,18 @@ if uploaded_file is not None:
                             e3.metric("Catastrophic Error Rate", f"{eval_metrics['catastrophic_rate']:.2%}")
                             e4.metric("Accept Rate", f"{eval_metrics.get('accept_rate', 0.0):.2%}")
 
-                            st.scatter_chart(eval_df.set_index("ri")[["abs_error"]])
+                            if px is not None:
+                                eval_plot = px.scatter(
+                                    eval_df,
+                                    x="ri",
+                                    y="abs_error",
+                                    color="decision" if "decision" in eval_df.columns else None,
+                                    color_discrete_map=DECISION_COLORS,
+                                    title="RI vs Absolute Error",
+                                )
+                                st.plotly_chart(eval_plot, use_container_width=True)
+                            else:
+                                st.scatter_chart(eval_df.set_index("ri")[["abs_error"]])
                             st.dataframe(eval_df, use_container_width=True)
                 except Exception as exc:
                     st.error(f"Could not evaluate reliability metrics: {exc}")
@@ -267,8 +382,34 @@ if uploaded_file is not None:
                         step=int(stream_step),
                     )
                 st.dataframe(stream_df, use_container_width=True)
-                st.line_chart(stream_df.set_index("time_cycles")[["predicted_rul", "trusted_rul"]])
-                st.line_chart(stream_df.set_index("time_cycles")[["reliability_index"]])
+                if px is not None:
+                    stream_long = stream_df.melt(
+                        id_vars=["time_cycles"],
+                        value_vars=["predicted_rul", "trusted_rul"],
+                        var_name="series",
+                        value_name="rul",
+                    )
+                    stream_fig = px.line(
+                        stream_long,
+                        x="time_cycles",
+                        y="rul",
+                        color="series",
+                        title="Streaming Replay: Raw vs Trusted RUL",
+                        color_discrete_sequence=["#17becf", "#bc5090"],
+                    )
+                    st.plotly_chart(stream_fig, use_container_width=True)
+                    ri_fig = px.line(
+                        stream_df,
+                        x="time_cycles",
+                        y="reliability_index",
+                        color="decision",
+                        title="Streaming Replay: Reliability Trajectory",
+                        color_discrete_map=DECISION_COLORS,
+                    )
+                    st.plotly_chart(ri_fig, use_container_width=True)
+                else:
+                    st.line_chart(stream_df.set_index("time_cycles")[["predicted_rul", "trusted_rul"]])
+                    st.line_chart(stream_df.set_index("time_cycles")[["reliability_index"]])
 
         with insights_tab:
             with st.expander("Advanced Insights", expanded=True):
@@ -304,7 +445,17 @@ if uploaded_file is not None:
                 )
 
                 st.subheader(f"Engine {selected_engine}: Window-Level RUL")
-                st.line_chart(window_df.set_index("window_index")["predicted_rul"])
+                if px is not None:
+                    window_fig = px.area(
+                        window_df,
+                        x="window_index",
+                        y="predicted_rul",
+                        title=f"Engine {selected_engine}: Window-Level RUL",
+                        color_discrete_sequence=["#00a896"],
+                    )
+                    st.plotly_chart(window_fig, use_container_width=True)
+                else:
+                    st.line_chart(window_df.set_index("window_index")["predicted_rul"])
                 st.caption(
                     f"Uncertainty summary - mean: {np.mean(selected_window_preds):.2f}, "
                     f"min: {np.min(selected_window_preds):.2f}, max: {np.max(selected_window_preds):.2f}, "
@@ -321,7 +472,18 @@ if uploaded_file is not None:
                     {"time_step": np.arange(1, len(attention) + 1), "attention_weight": attention}
                 )
                 st.subheader(f"Engine {selected_engine}: Attention Across Last {len(attention)} Timesteps")
-                st.area_chart(attention_df.set_index("time_step")["attention_weight"])
+                if px is not None:
+                    attention_fig = px.bar(
+                        attention_df,
+                        x="time_step",
+                        y="attention_weight",
+                        color="attention_weight",
+                        color_continuous_scale="Sunset",
+                        title=f"Engine {selected_engine}: Attention Weights",
+                    )
+                    st.plotly_chart(attention_fig, use_container_width=True)
+                else:
+                    st.area_chart(attention_df.set_index("time_step")["attention_weight"])
 
                 engine_df = raw_df[raw_df["unit_nr"] == selected_engine].sort_values("time_cycles")
                 sensor_columns = [col for col in RAW_COLUMN_NAMES if col.startswith("s_")]
@@ -334,7 +496,20 @@ if uploaded_file is not None:
                 )
                 if selected_sensors:
                     trend_df = engine_df[["time_cycles"] + selected_sensors].set_index("time_cycles")
-                    st.line_chart(trend_df)
+                    if px is not None:
+                        trend_long = trend_df.reset_index().melt(
+                            id_vars=["time_cycles"], var_name="sensor", value_name="reading"
+                        )
+                        trend_fig = px.line(
+                            trend_long,
+                            x="time_cycles",
+                            y="reading",
+                            color="sensor",
+                            title=f"Engine {selected_engine}: Sensor Trends",
+                        )
+                        st.plotly_chart(trend_fig, use_container_width=True)
+                    else:
+                        st.line_chart(trend_df)
 
                 st.subheader("Sensor Correlation Matrix (EDA)")
                 corr_cols = [col for col in sensor_columns if col in engine_df.columns][:12]
@@ -356,4 +531,15 @@ if uploaded_file is not None:
                         "count": hist_counts,
                     }
                 )
-                st.bar_chart(hist_df.set_index("bin_center")["count"])
+                if px is not None:
+                    hist_fig = px.bar(
+                        hist_df,
+                        x="bin_center",
+                        y="count",
+                        color="count",
+                        color_continuous_scale="Tealrose",
+                        title=f"{hist_sensor} Distribution",
+                    )
+                    st.plotly_chart(hist_fig, use_container_width=True)
+                else:
+                    st.bar_chart(hist_df.set_index("bin_center")["count"])
