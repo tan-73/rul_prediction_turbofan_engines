@@ -36,6 +36,7 @@ htmlcov/
 # Jupyter
 # -----------------------------
 .ipynb_checkpoints/
+notebooks/cmapss_notebooks/nasa-eda-rul-prediction.ipynb
 
 # -----------------------------
 # Streamlit

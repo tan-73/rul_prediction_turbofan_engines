@@ -6,6 +6,8 @@ This repository contains an end-to-end aircraft engine prognostics prototype for
 - physics-informed checkpoint support (PI mode)
 - reliability-aware gating (`ACCEPT` / `WARN` / `REJECT`)
 - streaming-style replay for cycle-by-cycle behavior inspection
+- modular FastAPI backend for headless/API-first deployment
+- secure MQTT ingestion and simulator scripts for real-time flows
 
 The focus is operational trustworthiness and explainability, not only raw RMSE.
 
@@ -48,6 +50,18 @@ For report plotting and colorful interactive dashboards, also install:
 
 ```powershell
 pip install matplotlib plotly
+```
+
+For API + MQTT + headless runtime:
+
+```powershell
+pip install fastapi uvicorn paho-mqtt
+```
+
+If TensorFlow import fails with protobuf descriptor errors, pin protobuf:
+
+```powershell
+pip install "protobuf<=3.20.3"
 ```
 
 ### Input CSV format
@@ -163,6 +177,82 @@ The dashboard now includes additional colorful visual diagnostics (Plotly-enable
 - decision donut charts
 - RI vs raw prediction scatter with uncertainty sizing
 - interactive streaming replay trajectories
+
+## FastAPI Backend (Modular Model Service)
+
+Run API server:
+
+```powershell
+python scripts\run_api.py --host 0.0.0.0 --port 8000
+```
+
+Key endpoints:
+
+- `GET /health`
+- `POST /v1/infer/file` (multipart file + `model_mode`)
+- `POST /v1/infer/json` (JSON rows + `model_mode`)
+- `POST /v1/compare/json` (JSON rows for Baseline vs PI deltas)
+- `POST /v1/replay/json` (JSON rows + engine replay settings)
+
+Modularity note:
+
+- model inference is behind `backend/model_service.py` adapters
+- model swapping can be done by replacing adapter implementation while preserving API contract
+- reliability gating remains post-prediction usage gating
+
+## Secure MQTT Real-Time Ingestion
+
+Subscriber (TLS + auth) with prediction/event logs:
+
+```powershell
+python ingestion\mqtt_secure_ingest.py ^
+  --broker your-broker-host ^
+  --port 8883 ^
+  --topic engines/fd001/raw ^
+  --ca-cert D:\path\to\ca.crt ^
+  --username your_user ^
+  --password your_pass ^
+  --model-mode Baseline
+```
+
+Simulator publisher from scenario CSV:
+
+```powershell
+python ingestion\mqtt_simulator.py ^
+  --csv examples\scenarios\scenario_noisy_behavior.csv ^
+  --broker your-broker-host ^
+  --port 8883 ^
+  --topic engines/fd001/raw ^
+  --ca-cert D:\path\to\ca.crt ^
+  --username your_user ^
+  --password your_pass ^
+  --delay-sec 0.2
+```
+
+Logs produced by subscriber:
+
+- `logs/mqtt_events.ndjson`
+- `logs/mqtt_predictions.csv`
+
+## Terminal-Only Runtime (Raspberry Pi Friendly)
+
+Single-mode inference:
+
+```powershell
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline
+```
+
+Side-by-side compare:
+
+```powershell
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine_dual.csv --compare
+```
+
+Replay output from terminal:
+
+```powershell
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --replay-engine 1 --replay-step 1
+```
 
 ## Reproducibility Freeze
 

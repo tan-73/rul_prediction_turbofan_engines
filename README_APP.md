@@ -87,6 +87,27 @@ Additional compare/reliability visuals now include:
 - RI vs raw prediction scatter (point size by window std)
 - enhanced streaming replay lines with decision-aware coloring
 
+## API-first and headless runtime options
+
+FastAPI backend:
+
+```bash
+python scripts/run_api.py --host 0.0.0.0 --port 8000
+```
+
+Terminal-only inference (Raspberry Pi friendly):
+
+```bash
+python scripts/run_headless_inference.py --csv examples/sample_cmapss_engine.csv --mode Baseline
+```
+
+Secure MQTT ingestion and simulator:
+
+```bash
+python ingestion/mqtt_secure_ingest.py --broker <host> --topic engines/fd001/raw --ca-cert <ca-cert-path>
+python ingestion/mqtt_simulator.py --csv examples/scenarios/scenario_stable_behavior.csv --broker <host> --topic engines/fd001/raw --ca-cert <ca-cert-path>
+```
+
 ## Reliability-aware gating
 
 The app now adds an operational reliability layer on top of model predictions:
