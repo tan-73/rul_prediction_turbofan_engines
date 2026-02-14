@@ -16,3 +16,6 @@ python-multipart==0.0.20
 
 # Real-time ingestion
 paho-mqtt==2.1.0
+
+# Edge benchmarking
+psutil==7.1.3

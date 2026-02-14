@@ -58,6 +58,12 @@ For API + MQTT + headless runtime:
 pip install fastapi uvicorn paho-mqtt
 ```
 
+For Raspberry Pi edge export + benchmark tooling:
+
+```powershell
+pip install psutil
+```
+
 If TensorFlow import fails with protobuf descriptor errors, pin protobuf:
 
 ```powershell
@@ -253,6 +259,41 @@ Replay output from terminal:
 ```powershell
 python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --replay-engine 1 --replay-step 1
 ```
+
+## Raspberry Pi Phase (Edge Export + Benchmark)
+
+Export one-step TFLite model (Baseline example):
+
+```powershell
+python scripts\export_tflite_edge.py --mode Baseline --out-dir edge_models --quantization float16
+```
+
+Export PI model:
+
+```powershell
+python scripts\export_tflite_edge.py --mode "Physics-Informed" --out-dir edge_models --quantization float16
+```
+
+Run edge parity + latency benchmark:
+
+```powershell
+python scripts\benchmark_edge_inference.py ^
+  --csv examples\sample_cmapss_engine_dual.csv ^
+  --mode Baseline ^
+  --tflite edge_models\baseline_one_step_fp16.tflite ^
+  --reports-dir reports\edge
+```
+
+Artifacts produced:
+
+- `reports/edge/edge_benchmark_metrics_baseline.json`
+- `reports/edge/edge_benchmark_parity_baseline.csv`
+- `reports/edge/edge_benchmark_summary_baseline.csv`
+
+Notes:
+
+- Benchmark checks prediction parity, RI parity, and decision-match rate (`ACCEPT/WARN/REJECT`) between TensorFlow and TFLite.
+- Gating remains post-prediction usage gating.
 
 ## Reproducibility Freeze
 
