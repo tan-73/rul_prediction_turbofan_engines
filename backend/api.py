@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import io
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Union
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.model_service import ModelService
 from backend.schemas import CompareBatchRequest, ReplayRequest, RowBatchRequest
@@ -12,9 +16,23 @@ from backend.schemas import CompareBatchRequest, ReplayRequest, RowBatchRequest
 
 app = FastAPI(title="RUL Backend API", version="1.0.0")
 model_service = ModelService()
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+if (FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="ui-assets")
 
 
-def _rows_to_csv_bytes(rows: List[Dict[str, float | int]]) -> bytes:
+def _rows_to_csv_bytes(rows: List[Dict[str, Union[float, int]]]) -> bytes:
     if not rows:
         raise ValueError("rows cannot be empty.")
     df = pd.DataFrame(rows)
@@ -26,6 +44,19 @@ def _rows_to_csv_bytes(rows: List[Dict[str, float | int]]) -> bytes:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/")
+def ui_home():
+    if FRONTEND_INDEX.exists():
+        return FileResponse(str(FRONTEND_INDEX))
+    return JSONResponse(
+        {
+            "status": "ok",
+            "message": "Frontend build not found. Build React UI in frontend/ and rerun API.",
+            "api_docs": "/docs",
+        }
+    )
 
 
 @app.post("/v1/infer/file")

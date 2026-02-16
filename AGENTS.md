@@ -11,16 +11,20 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - Post-prediction gating (`ACCEPT` / `WARN` / `REJECT`)
 - Streaming replay and ablation tooling
 - Modular FastAPI backend and secure MQTT ingestion scripts
+- Raspberry Pi edge export/benchmark scripts
+- Lightweight React UI (API-first) for Pi/browser usage
 
 ## Source of Truth
 
 - Runtime inference core: `inference/attention_model.py`
 - Reliability and gating logic: `inference/reliability.py`
 - Streamlit app: `app.py`
+- React UI source: `frontend/src/App.jsx`
 - Backend API: `backend/api.py`
 - Backend model adapter/service: `backend/model_service.py`
 - MQTT ingestion/simulator: `ingestion/mqtt_secure_ingest.py`, `ingestion/mqtt_simulator.py`
 - Ablation report generation: `scripts/generate_ablation_report.py`
+- Edge export/benchmark: `scripts/export_tflite_edge.py`, `scripts/benchmark_edge_inference.py`
 
 ## Hard Constraints (Do Not Break)
 
@@ -45,6 +49,12 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 
 Any contract-breaking change must be versioned and documented.
 
+## UI Contracts
+
+- React UI must consume existing `/v1/*` endpoints without changing their payload semantics.
+- Keep Baseline, PI, and compare behaviors equivalent to Streamlit outputs.
+- UI should remain responsive on Raspberry Pi-class browsers (avoid heavy client-side dependencies).
+
 ## Real-Time Ingestion Contracts
 
 - MQTT payload must include C-MAPSS columns:
@@ -61,6 +71,8 @@ python scripts\run_api.py --help
 python scripts\run_headless_inference.py --help
 python ingestion\mqtt_secure_ingest.py --help
 python ingestion\mqtt_simulator.py --help
+python scripts\export_tflite_edge.py --help
+python scripts\benchmark_edge_inference.py --help
 streamlit run app.py
 ```
 

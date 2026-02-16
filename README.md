@@ -8,6 +8,7 @@ This repository contains an end-to-end aircraft engine prognostics prototype for
 - streaming-style replay for cycle-by-cycle behavior inspection
 - modular FastAPI backend for headless/API-first deployment
 - secure MQTT ingestion and simulator scripts for real-time flows
+- lightweight React dashboard (`frontend/`) for Pi-friendly browser UI
 
 The focus is operational trustworthiness and explainability, not only raw RMSE.
 
@@ -56,6 +57,13 @@ For API + MQTT + headless runtime:
 
 ```powershell
 pip install fastapi uvicorn paho-mqtt
+```
+
+For React UI development/build (install Node.js LTS first):
+
+```powershell
+cd frontend
+npm install
 ```
 
 For Raspberry Pi edge export + benchmark tooling:
@@ -206,6 +214,8 @@ Modularity note:
 - model swapping can be done by replacing adapter implementation while preserving API contract
 - reliability gating remains post-prediction usage gating
 
+If `frontend/dist` exists, FastAPI serves the built React UI at `/`.
+
 ## Secure MQTT Real-Time Ingestion
 
 Subscriber (TLS + auth) with prediction/event logs:
@@ -294,6 +304,37 @@ Notes:
 
 - Benchmark checks prediction parity, RI parity, and decision-match rate (`ACCEPT/WARN/REJECT`) between TensorFlow and TFLite.
 - Gating remains post-prediction usage gating.
+
+## React UI Modernization (Raspberry Pi Usable)
+
+The repository now includes a lightweight React dashboard in `frontend/` that uses the same FastAPI contracts.
+
+Run React UI in dev mode:
+
+```powershell
+cd frontend
+npm run dev
+```
+
+Build and serve through FastAPI:
+
+```powershell
+cd frontend
+npm run build
+cd ..
+python scripts\run_api.py --host 0.0.0.0 --port 8000
+```
+
+Open:
+
+- `http://localhost:5173` (dev mode)
+- `http://localhost:8000/` (built UI served by FastAPI)
+
+Current React parity coverage:
+
+- Baseline/PI inference
+- Baseline vs PI compare mode
+- Replay execution with per-cycle output table
 
 ## Reproducibility Freeze
 

@@ -108,6 +108,39 @@ python ingestion/mqtt_secure_ingest.py --broker <host> --topic engines/fd001/raw
 python ingestion/mqtt_simulator.py --csv examples/scenarios/scenario_stable_behavior.csv --broker <host> --topic engines/fd001/raw --ca-cert <ca-cert-path>
 ```
 
+## React UI (Pi-friendly)
+
+The project now includes a lightweight React dashboard that consumes FastAPI endpoints.
+
+Install and run dev mode:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Build static UI and serve through FastAPI:
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+python scripts/run_api.py --host 0.0.0.0 --port 8000
+```
+
+Open:
+
+- `http://localhost:5173` (dev mode)
+- `http://localhost:8000/` (built UI served by FastAPI)
+
+Current React parity coverage:
+
+- Baseline and PI inference
+- Baseline vs PI compare mode
+- Streaming replay trigger and table output
+
 ## Reliability-aware gating
 
 The app now adds an operational reliability layer on top of model predictions:

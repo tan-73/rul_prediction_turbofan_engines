@@ -66,6 +66,8 @@ tmp/
 temp/
 reports/
 reports/**
+frontend/node_modules/
+frontend/dist/
 
 TODO.md
 IMPLEMENTATION.md

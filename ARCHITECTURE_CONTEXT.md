@@ -10,6 +10,7 @@
 6. Gating produces `ACCEPT` / `WARN` / `REJECT` + trusted RUL.
 7. Outputs are exposed via:
    - Streamlit UI (`app.py`)
+   - React UI (`frontend/` calling FastAPI)
    - FastAPI (`backend/api.py`)
    - CLI scripts (`scripts/run_headless_inference.py`)
    - MQTT ingestion pipeline (`ingestion/mqtt_secure_ingest.py`)
@@ -26,6 +27,7 @@
 - New API behavior: extend `backend/api.py` with versioned routes.
 - New streaming source: add ingestion adapters under `ingestion/`.
 - New reports: add scripts under `scripts/` and write artifacts under `reports/`.
+- Web UI updates: modify React components in `frontend/src/` without changing API contract.
 
 ## Operational Modes
 
@@ -37,6 +39,10 @@
 
 - Streamlit:
   `streamlit run app.py`
+- React UI (dev):
+  `cd frontend && npm install && npm run dev`
+- React UI (build + serve from FastAPI):
+  `cd frontend && npm install && npm run build`
 - FastAPI:
   `python scripts\run_api.py --host 0.0.0.0 --port 8000`
 - Headless CLI:
@@ -45,4 +51,8 @@
   `python ingestion\mqtt_secure_ingest.py ...`
 - MQTT simulator:
   `python ingestion\mqtt_simulator.py ...`
+- Edge export:
+  `python scripts\export_tflite_edge.py --mode Baseline --out-dir edge_models --quantization float16`
+- Edge benchmark:
+  `python scripts\benchmark_edge_inference.py --csv <csv> --mode Baseline --tflite <model> --reports-dir reports\edge`
 
