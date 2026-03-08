@@ -68,6 +68,27 @@ Streamlit reads:
 - `logs/mqtt_predictions.csv`
 - `logs/live_state.json`
 
+## Optional Artifact Backend (model_artifacts.zip)
+
+An optional notebook-exported backend is now available behind the model service adapter boundary.
+
+- Archive path: `model_artifacts.zip` at repo root
+- Backend selector value: `artifact`
+- Default backend remains `attention` (Baseline / Physics-Informed behavior unchanged)
+
+CLI usage:
+
+```powershell
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --backend artifact
+```
+
+Validation/benchmark:
+
+```powershell
+python scripts\run_validation_suite.py --include-artifact-backend
+python scripts\benchmark_model_backends.py
+```
+
 ## Input Format (CSV Inference)
 
 Accepted:

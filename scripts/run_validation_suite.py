@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
         default=[str(p) for p in DEFAULT_FIXTURES],
         help="CSV fixtures for regression sanity checks.",
     )
+    parser.add_argument(
+        "--include-artifact-backend",
+        action="store_true",
+        help="Also compare Baseline attention backend vs artifact backend (if artifact is available).",
+    )
     return parser.parse_args()
 
 
@@ -52,6 +57,7 @@ def main() -> None:
 
     rows: List[Dict[str, object]] = []
     golden: Dict[str, Dict[str, object]] = {}
+    backend_rows: List[Dict[str, object]] = []
 
     for fixture_str in args.fixtures:
         fixture = Path(fixture_str)
@@ -76,6 +82,28 @@ def main() -> None:
             rows.append(row)
             golden[fixture_key][mode] = row
 
+        if args.include_artifact_backend:
+            try:
+                attention = service.infer(payload, model_mode="Baseline", model_backend="attention")
+                artifact = service.infer(payload, model_mode="Baseline", model_backend="artifact")
+                shared = sorted(set(attention["engine_ids"]) & set(artifact["engine_ids"]))
+                backend_rows.append(
+                    {
+                        "fixture": fixture_key,
+                        "engines_shared": len(shared),
+                        "attention_overall_mean_rul": float(attention["overall_mean_rul"]),
+                        "artifact_overall_mean_rul": float(artifact["overall_mean_rul"]),
+                        "delta_overall_mean_rul": float(artifact["overall_mean_rul"] - attention["overall_mean_rul"]),
+                        "attention_overall_reliability_index": float(attention["overall_reliability_index"]),
+                        "artifact_overall_reliability_index": float(artifact["overall_reliability_index"]),
+                        "delta_overall_reliability_index": float(
+                            artifact["overall_reliability_index"] - attention["overall_reliability_index"]
+                        ),
+                    }
+                )
+            except Exception as exc:
+                backend_rows.append({"fixture": fixture_key, "error": str(exc)})
+
     df = pd.DataFrame(rows)
     csv_path = args.reports_dir / "validation_summary.csv"
     json_path = args.reports_dir / "validation_summary.json"
@@ -94,6 +122,15 @@ def main() -> None:
     }
     agg_path = args.reports_dir / "validation_aggregate.json"
     agg_path.write_text(json.dumps(agg, indent=2), encoding="utf-8")
+
+    if backend_rows:
+        backend_df = pd.DataFrame(backend_rows)
+        backend_csv_path = args.reports_dir / "validation_backend_comparison.csv"
+        backend_json_path = args.reports_dir / "validation_backend_comparison.json"
+        backend_df.to_csv(backend_csv_path, index=False)
+        backend_json_path.write_text(json.dumps(backend_rows, indent=2), encoding="utf-8")
+        print(f"- backend_comparison_csv: {backend_csv_path}")
+        print(f"- backend_comparison_json: {backend_json_path}")
 
     print("Validation suite complete.")
     print(f"- summary_csv: {csv_path}")
