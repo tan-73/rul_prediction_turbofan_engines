@@ -23,6 +23,7 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - Backend API: `backend/api.py`
 - Backend model adapter/service: `backend/model_service.py`
 - MQTT ingestion/simulator: `ingestion/mqtt_secure_ingest.py`, `ingestion/mqtt_simulator.py`
+- Digital twin publisher: `ingestion/digital_twin_streamer.py`
 - Ablation report generation: `scripts/generate_ablation_report.py`
 - Edge export/benchmark: `scripts/export_tflite_edge.py`, `scripts/benchmark_edge_inference.py`
 
@@ -71,6 +72,7 @@ python scripts\run_api.py --help
 python scripts\run_headless_inference.py --help
 python ingestion\mqtt_secure_ingest.py --help
 python ingestion\mqtt_simulator.py --help
+python ingestion\digital_twin_streamer.py --help
 python scripts\export_tflite_edge.py --help
 python scripts\benchmark_edge_inference.py --help
 streamlit run app.py

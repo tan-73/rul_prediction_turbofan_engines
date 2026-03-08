@@ -249,6 +249,37 @@ Logs produced by subscriber:
 
 - `logs/mqtt_events.ndjson`
 - `logs/mqtt_predictions.csv`
+- `logs/live_state.json`
+
+## Local Mosquitto Demo (No TLS)
+
+If Mosquitto is running locally on `127.0.0.1:1883`, run:
+
+Subscriber:
+
+```powershell
+python ingestion\mqtt_secure_ingest.py ^
+  --broker 127.0.0.1 ^
+  --port 1883 ^
+  --topic engines/fd001/raw ^
+  --model-mode Baseline ^
+  --insecure-no-tls
+```
+
+Digital twin publisher:
+
+```powershell
+python ingestion\digital_twin_streamer.py ^
+  --broker 127.0.0.1 ^
+  --port 1883 ^
+  --topic engines/fd001/raw ^
+  --interval-sec 0.5 ^
+  --cycles 300
+```
+
+Optional: the external digital twin reference repo can remain cloned at:
+
+- `digital-twin/digital-twin-for-aircraft-engine-maintenance`
 
 ## Terminal-Only Runtime (Raspberry Pi Friendly)
 
