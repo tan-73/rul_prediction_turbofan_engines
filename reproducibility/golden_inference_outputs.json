@@ -1,0 +1,112 @@
+{
+  "examples/sample_cmapss_engine.csv": {
+    "Baseline": {
+      "fixture": "examples/sample_cmapss_engine.csv",
+      "mode": "Baseline",
+      "engines": 1,
+      "overall_mean_rul": 0.31054821610450745,
+      "overall_reliability_index": 0.5723542728087723,
+      "accept_count": 0,
+      "warn_count": 1,
+      "reject_count": 0
+    },
+    "Physics-Informed": {
+      "fixture": "examples/sample_cmapss_engine.csv",
+      "mode": "Physics-Informed",
+      "engines": 1,
+      "overall_mean_rul": 8.209745407104492,
+      "overall_reliability_index": 0.7890582329707101,
+      "accept_count": 1,
+      "warn_count": 0,
+      "reject_count": 0
+    }
+  },
+  "examples/sample_cmapss_engine_dual.csv": {
+    "Baseline": {
+      "fixture": "examples/sample_cmapss_engine_dual.csv",
+      "mode": "Baseline",
+      "engines": 2,
+      "overall_mean_rul": 5.765435695648193,
+      "overall_reliability_index": 0.9024781965225621,
+      "accept_count": 2,
+      "warn_count": 0,
+      "reject_count": 0
+    },
+    "Physics-Informed": {
+      "fixture": "examples/sample_cmapss_engine_dual.csv",
+      "mode": "Physics-Informed",
+      "engines": 2,
+      "overall_mean_rul": 9.771081924438477,
+      "overall_reliability_index": 0.9304690076065852,
+      "accept_count": 2,
+      "warn_count": 0,
+      "reject_count": 0
+    }
+  },
+  "examples/scenarios/scenario_stable_behavior.csv": {
+    "Baseline": {
+      "fixture": "examples/scenarios/scenario_stable_behavior.csv",
+      "mode": "Baseline",
+      "engines": 1,
+      "overall_mean_rul": 0.7102249264717102,
+      "overall_reliability_index": 0.5690981083514604,
+      "accept_count": 0,
+      "warn_count": 1,
+      "reject_count": 0
+    },
+    "Physics-Informed": {
+      "fixture": "examples/scenarios/scenario_stable_behavior.csv",
+      "mode": "Physics-Informed",
+      "engines": 1,
+      "overall_mean_rul": 8.85434627532959,
+      "overall_reliability_index": 0.8607140302109016,
+      "accept_count": 1,
+      "warn_count": 0,
+      "reject_count": 0
+    }
+  },
+  "examples/scenarios/scenario_noisy_behavior.csv": {
+    "Baseline": {
+      "fixture": "examples/scenarios/scenario_noisy_behavior.csv",
+      "mode": "Baseline",
+      "engines": 1,
+      "overall_mean_rul": 0.2617247700691223,
+      "overall_reliability_index": 0.5218126674853883,
+      "accept_count": 0,
+      "warn_count": 1,
+      "reject_count": 0
+    },
+    "Physics-Informed": {
+      "fixture": "examples/scenarios/scenario_noisy_behavior.csv",
+      "mode": "Physics-Informed",
+      "engines": 1,
+      "overall_mean_rul": 7.7559356689453125,
+      "overall_reliability_index": 0.7149518713240683,
+      "accept_count": 0,
+      "warn_count": 1,
+      "reject_count": 0
+    }
+  },
+  "examples/scenarios/scenario_rapid_degradation.csv": {
+    "Baseline": {
+      "fixture": "examples/scenarios/scenario_rapid_degradation.csv",
+      "mode": "Baseline",
+      "engines": 1,
+      "overall_mean_rul": 0.2428511083126068,
+      "overall_reliability_index": 0.5369906515623478,
+      "accept_count": 0,
+      "warn_count": 1,
+      "reject_count": 0
+    },
+    "Physics-Informed": {
+      "fixture": "examples/scenarios/scenario_rapid_degradation.csv",
+      "mode": "Physics-Informed",
+      "engines": 1,
+      "overall_mean_rul": 7.757388114929199,
+      "overall_reliability_index": 0.7825146200186587,
+      "accept_count": 1,
+      "warn_count": 0,
+      "reject_count": 0
+    }
+  }
+}
