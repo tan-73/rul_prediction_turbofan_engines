@@ -34,13 +34,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-id", default="rul-secure-ingest")
     parser.add_argument("--username")
     parser.add_argument("--password")
-    parser.add_argument("--ca-cert", type=Path, required=True)
+    parser.add_argument("--ca-cert", type=Path)
     parser.add_argument("--client-cert", type=Path)
     parser.add_argument("--client-key", type=Path)
+    parser.add_argument(
+        "--insecure-no-tls",
+        action="store_true",
+        help="Disable TLS (for local Mosquitto demo setups).",
+    )
     parser.add_argument("--model-mode", default="Baseline")
     parser.add_argument("--min-cycles", type=int, default=DEFAULT_WINDOW_LENGTH)
     parser.add_argument("--event-log", type=Path, default=Path("logs/mqtt_events.ndjson"))
     parser.add_argument("--prediction-log", type=Path, default=Path("logs/mqtt_predictions.csv"))
+    parser.add_argument("--live-state", type=Path, default=Path("logs/live_state.json"))
     return parser.parse_args()
 
 
@@ -57,6 +63,24 @@ def _append_prediction(path: Path, row: Dict[str, object]) -> None:
         df.to_csv(path, index=False)
     else:
         df.to_csv(path, mode="a", header=False, index=False)
+
+
+def _write_live_state(
+    path: Path,
+    engine_id: int,
+    latest_sensor_row: Dict[str, float | int],
+    prediction_row: Dict[str, object] | None,
+    rows_for_engine: List[Dict[str, float | int]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+        "engine_id": int(engine_id),
+        "received_cycles_for_engine": int(len(rows_for_engine)),
+        "latest_sensor_row": latest_sensor_row,
+        "latest_prediction": prediction_row,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _normalize_row(row: Dict[str, object], required_columns: List[str]) -> Dict[str, float | int]:
@@ -79,15 +103,18 @@ def run() -> None:
     if args.username:
         client.username_pw_set(args.username, args.password)
 
-    tls_kwargs = {
-        "ca_certs": str(args.ca_cert),
-        "cert_reqs": ssl.CERT_REQUIRED,
-        "tls_version": ssl.PROTOCOL_TLS_CLIENT,
-    }
-    if args.client_cert and args.client_key:
-        tls_kwargs["certfile"] = str(args.client_cert)
-        tls_kwargs["keyfile"] = str(args.client_key)
-    client.tls_set(**tls_kwargs)
+    if not args.insecure_no_tls:
+        if args.ca_cert is None:
+            raise ValueError("--ca-cert is required unless --insecure-no-tls is used.")
+        tls_kwargs = {
+            "ca_certs": str(args.ca_cert),
+            "cert_reqs": ssl.CERT_REQUIRED,
+            "tls_version": ssl.PROTOCOL_TLS_CLIENT,
+        }
+        if args.client_cert and args.client_key:
+            tls_kwargs["certfile"] = str(args.client_cert)
+            tls_kwargs["keyfile"] = str(args.client_key)
+        client.tls_set(**tls_kwargs)
 
     def on_connect(client_obj, _userdata, _flags, rc):
         if rc != 0:
@@ -113,6 +140,13 @@ def run() -> None:
                     "payload": row,
                 },
             )
+            _write_live_state(
+                args.live_state,
+                engine_id=engine_id,
+                latest_sensor_row=row,
+                prediction_row=None,
+                rows_for_engine=by_engine[engine_id],
+            )
             if len(by_engine[engine_id]) < max(args.min_cycles, DEFAULT_WINDOW_LENGTH):
                 return
 
@@ -131,6 +165,13 @@ def run() -> None:
                 "decision": rel["decision"],
             }
             _append_prediction(args.prediction_log, out)
+            _write_live_state(
+                args.live_state,
+                engine_id=engine_id,
+                latest_sensor_row=row,
+                prediction_row=out,
+                rows_for_engine=by_engine[engine_id],
+            )
             print(json.dumps(out))
         except Exception as exc:  # pragma: no cover - runtime ingestion guard.
             print(f"[mqtt] message handling error: {exc}")

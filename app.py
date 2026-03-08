@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +29,8 @@ st.title("Aircraft Engine RUL Predictor")
 st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
 COMPARE_MODE = "Compare (Baseline vs PI)"
 DECISION_COLORS = {"ACCEPT": "#2ca02c", "WARN": "#ff7f0e", "REJECT": "#d62728", "RAW": "#1f77b4"}
+LIVE_STATE_FILE = Path("logs") / "live_state.json"
+LIVE_PREDICTIONS_FILE = Path("logs") / "mqtt_predictions.csv"
 
 
 def _show_plotly_hint_once() -> None:
@@ -54,6 +58,30 @@ def _render_decision_distribution(df: pd.DataFrame, column: str = "decision") ->
         st.bar_chart(counts.set_index(column)["count"])
 
 
+def _read_live_state() -> dict:
+    if not LIVE_STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(LIVE_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _read_live_predictions(limit: int = 250) -> pd.DataFrame:
+    if not LIVE_PREDICTIONS_FILE.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(LIVE_PREDICTIONS_FILE)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    if "timestamp_utc" in df.columns:
+        df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], errors="coerce", utc=True)
+        df = df.sort_values("timestamp_utc")
+    return df.tail(limit).reset_index(drop=True)
+
+
 @st.cache_resource
 def get_model(model_mode: str):
     return load_attention_model(get_model_weights_path(model_mode))
@@ -77,6 +105,65 @@ def build_reliability_df(result: dict) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(reliability_rows)
+
+
+st.subheader("Live Digital Twin Feed (MQTT)")
+with st.expander("Start MQTT Digital Twin Pipeline", expanded=False):
+    st.code(
+        "python ingestion\\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls",
+        language="powershell",
+    )
+    st.code(
+        "python ingestion\\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000",
+        language="powershell",
+    )
+
+live_a, live_b, live_c = st.columns([1, 1, 2])
+refresh_now = live_a.button("Refresh Live Feed")
+auto_refresh = live_b.checkbox("Auto-refresh", value=False, key="mqtt_auto_refresh")
+refresh_sec = int(live_c.slider("Refresh interval (sec)", min_value=1, max_value=10, value=2))
+
+live_state = _read_live_state()
+live_pred_df = _read_live_predictions()
+latest_pred = (live_state.get("latest_prediction") or {}) if live_state else {}
+if not latest_pred and not live_pred_df.empty:
+    latest_pred = live_pred_df.iloc[-1].to_dict()
+
+live_metrics = st.columns(6)
+live_metrics[0].metric("Engine", str(live_state.get("engine_id", "-")) if live_state else "-")
+live_metrics[1].metric("Cycles", int(live_state.get("received_cycles_for_engine", 0)) if live_state else 0)
+live_metrics[2].metric("Predicted RUL", f"{float(latest_pred.get('predicted_rul', 0.0)):.2f}")
+live_metrics[3].metric("Trusted RUL", f"{float(latest_pred.get('trusted_rul', 0.0)):.2f}")
+live_metrics[4].metric("RI", f"{float(latest_pred.get('ri', 0.0)):.3f}")
+live_metrics[5].metric("Decision", str(latest_pred.get("decision", "-")))
+
+if live_state:
+    st.caption(f"Last update: {live_state.get('updated_at_utc', '-')}")
+
+if not live_pred_df.empty:
+    if "timestamp_utc" in live_pred_df.columns and px is not None:
+        live_plot_df = live_pred_df.copy()
+        fig_live = px.line(
+            live_plot_df,
+            x="timestamp_utc",
+            y=[c for c in ["predicted_rul", "trusted_rul", "ri"] if c in live_plot_df.columns],
+            title="Live RUL / RI Trajectory",
+        )
+        st.plotly_chart(fig_live, use_container_width=True)
+    else:
+        cols = [c for c in ["predicted_rul", "trusted_rul", "ri"] if c in live_pred_df.columns]
+        if cols:
+            st.line_chart(live_pred_df[cols])
+    if "decision" in live_pred_df.columns:
+        _render_decision_distribution(live_pred_df, column="decision")
+    with st.expander("Recent Live Rows", expanded=False):
+        st.dataframe(live_pred_df.tail(40), use_container_width=True)
+else:
+    st.info("No live MQTT predictions yet. Start ingest + digital twin and refresh.")
+
+if auto_refresh and not refresh_now:
+    time.sleep(max(refresh_sec, 1))
+    st.rerun()
 
 
 uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
