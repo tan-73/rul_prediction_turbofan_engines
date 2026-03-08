@@ -63,10 +63,11 @@ def ui_home():
 async def infer_from_file(
     file: UploadFile = File(...),
     model_mode: str = "Baseline",
+    model_backend: str = "attention",
 ) -> Dict[str, object]:
     try:
         payload = await file.read()
-        return model_service.infer(payload, model_mode=model_mode)
+        return model_service.infer(payload, model_mode=model_mode, model_backend=model_backend)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -75,16 +76,16 @@ async def infer_from_file(
 def infer_from_rows(req: RowBatchRequest) -> Dict[str, object]:
     try:
         payload = _rows_to_csv_bytes(req.rows)
-        return model_service.infer(payload, model_mode=req.model_mode)
+        return model_service.infer(payload, model_mode=req.model_mode, model_backend=req.model_backend)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/v1/compare/json")
-def compare_from_rows(req: CompareBatchRequest) -> Dict[str, object]:
+def compare_from_rows(req: CompareBatchRequest, model_backend: str = "attention") -> Dict[str, object]:
     try:
         payload = _rows_to_csv_bytes(req.rows)
-        return model_service.compare(payload)
+        return model_service.compare(payload, model_backend=model_backend)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -98,6 +99,7 @@ def replay_from_rows(req: ReplayRequest) -> Dict[str, object]:
             model_mode=req.model_mode,
             engine_id=int(req.engine_id),
             step=int(req.step),
+            model_backend=req.model_backend,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
