@@ -1,176 +1,47 @@
-# Aircraft Engine RUL Predictor (Demo App)
+﻿# Aircraft Engine RUL Predictor (Streamlit)
 
-This app loads the existing pretrained attention-based GRU model from this repository and predicts Remaining Useful Life (RUL) from uploaded sensor CSV data.
+This app is the primary UI for the project and supports:
 
-## Run the app
+- CSV-based inference
+- Baseline / Physics-Informed / Compare modes
+- Reliability gating and diagnostics
+- Streaming replay
+- Live MQTT digital twin monitoring
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
+## Run
 
-```bash
-pip install streamlit tensorflow pandas numpy scikit-learn
-```
-
-For richer dashboard charts:
-
-```bash
-pip install plotly
-```
-
-3. Run:
-
-```bash
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
-On the app page, choose **Model Mode**:
+## Live MQTT Panel
 
-- `Baseline` (original FD001 attention checkpoint)
-- `Physics-Informed` (uploaded PI checkpoint from retraining)
-- `Compare (Baseline vs PI)` (side-by-side in one run)
+Inside Streamlit, use **Live Digital Twin Feed (MQTT)**.
 
-## Expected CSV format
+Run these in separate terminals:
 
-The app supports either of these input styles:
-
-- **Named C-MAPSS columns**:
-  - `unit_nr`, `time_cycles`, `op_setting_1`, `op_setting_2`, `op_setting_3`, `s_1` ... `s_21`
-- **Raw numeric columns**:
-  - At least 26 columns in C-MAPSS original order (`0..25` style).
-
-Notes:
-- Each row is one cycle record.
-- One file can contain one or multiple engines (`unit_nr`).
-- Each engine must have at least 30 rows (window length used in the original notebook).
-
-## Example use case
-
-An aircraft maintenance engineer uploads recent engine run-to-date sensor readings.
-The app runs the pretrained attention model and returns:
-
-- Predicted RUL
-- A simple status:
-  - `Healthy`
-  - `Maintenance Required Soon`
-
-This is for demonstration/prototyping and not intended for production maintenance decisions.
-
-## Curated replay scenarios
-
-The repository includes curated scenario files for demo playback:
-
-- `examples/scenarios/scenario_stable_behavior.csv`
-- `examples/scenarios/scenario_noisy_behavior.csv`
-- `examples/scenarios/scenario_rapid_degradation.csv`
-
-Regenerate scenarios:
-
-```bash
-python scripts/generate_demo_scenarios.py
+```powershell
+python ingestion\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls
+python ingestion\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000
 ```
 
-## Dashboard visuals included
+Live panel reads:
 
-After inference, the app also shows an **Advanced Insights** section with:
+- `logs/live_state.json`
+- `logs/mqtt_predictions.csv`
+- `logs/mqtt_events.ndjson`
 
-- window-level RUL trend and spread (mean/min/max/std)
-- attention weight profile for the latest prediction window
-- selected sensor trend lines over cycles
-- cycle continuity and data-quality checks
-- sensor correlation matrix and histogram snapshot (EDA-style)
+## Notebook Training Artifact
 
-Additional compare/reliability visuals now include:
+The notebook
+`notebooks/cmapss_notebooks/predicting-remaining-useful-life-turbofan-engine.ipynb`
+can export model files on Kaggle to `model_artifacts.zip`.
 
-- Baseline vs PI grouped RUL charts
-- PI-minus-Baseline delta scatter
-- decision distribution donut chart
-- RI vs raw prediction scatter (point size by window std)
-- enhanced streaming replay lines with decision-aware coloring
+A local archive currently exists at project root:
 
-## API-first and headless runtime options
+- `model_artifacts.zip`
 
-FastAPI backend:
-
-```bash
-python scripts/run_api.py --host 0.0.0.0 --port 8000
-```
-
-Terminal-only inference (Raspberry Pi friendly):
-
-```bash
-python scripts/run_headless_inference.py --csv examples/sample_cmapss_engine.csv --mode Baseline
-```
-
-Secure MQTT ingestion and simulator:
-
-```bash
-python ingestion/mqtt_secure_ingest.py --broker <host> --topic engines/fd001/raw --ca-cert <ca-cert-path>
-python ingestion/mqtt_simulator.py --csv examples/scenarios/scenario_stable_behavior.csv --broker <host> --topic engines/fd001/raw --ca-cert <ca-cert-path>
-```
-
-## React UI (Pi-friendly)
-
-The project now includes a lightweight React dashboard that consumes FastAPI endpoints.
-
-Install and run dev mode:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Build static UI and serve through FastAPI:
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-python scripts/run_api.py --host 0.0.0.0 --port 8000
-```
-
-Open:
-
-- `http://localhost:5173` (dev mode)
-- `http://localhost:8000/` (built UI served by FastAPI)
-
-Current React parity coverage:
-
-- Baseline and PI inference
-- Baseline vs PI compare mode
-- Streaming replay trigger and table output
-
-## Reliability-aware gating
-
-The app now adds an operational reliability layer on top of model predictions:
-
-- computes a **Reliability Index (RI)** from:
-  - temporal stability across overlapping window predictions
-  - physics-consistency checks (monotonicity, smoothness, boundary sanity)
-- gates usage of predictions as:
-  - `ACCEPT`
-  - `WARN`
-  - `REJECT` (with conservative fallback RUL)
-
-This gating layer does not change model architecture or retrain weights. It controls how predictions are trusted operationally.
-
-## Streaming-style demonstration
-
-In the **Reliability Gating** tab, a cycle-by-cycle replay simulates real-time operation:
-
-- runs rolling inference as cycles arrive
-- updates RI and decision state each step
-- visualizes raw vs trusted RUL trends over time
-
-## Reliability evaluation workflow
-
-In the **Reliability Gating** tab:
-
-- Download model output log as CSV (`engine_id,predicted_rul,ri,decision,trusted_rul`)
-- Upload optional ground-truth CSV (`engine_id,true_rul`)
-- App computes:
-  - mean absolute error
-  - RI-error correlation
-  - catastrophic error rate (|error| > 20)
-  - accept-rate under gating
+This artifact is not yet wired as default runtime inference; integrate through adapter layer first.

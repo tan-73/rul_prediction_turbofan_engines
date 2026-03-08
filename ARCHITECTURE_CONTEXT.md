@@ -1,58 +1,55 @@
-# Architecture Context
+﻿# Architecture Context
 
 ## High-Level Flow
 
-1. Input data (CSV rows or streaming rows) enters the system.
-2. Preprocessing/windowing runs in `inference/attention_model.py`.
-3. Model predicts per-window RUL (Baseline or Physics-Informed).
-4. Aggregation computes per-engine mean RUL.
+1. Input arrives either from uploaded CSV (batch) or MQTT stream (live).
+2. Preprocessing and windowing happen in `inference/attention_model.py`.
+3. Model predicts per-window RUL using `Baseline` or `Physics-Informed` weights.
+4. Per-engine aggregation computes mean raw RUL.
 5. Reliability metrics are computed in `inference/reliability.py`.
-6. Gating produces `ACCEPT` / `WARN` / `REJECT` + trusted RUL.
-7. Outputs are exposed via:
-   - Streamlit UI (`app.py`)
-   - React UI (`frontend/` calling FastAPI)
-   - FastAPI (`backend/api.py`)
-   - CLI scripts (`scripts/run_headless_inference.py`)
-   - MQTT ingestion pipeline (`ingestion/mqtt_secure_ingest.py`)
+6. Gating produces `ACCEPT/WARN/REJECT` and trusted RUL.
+7. Outputs are surfaced in:
+   - Streamlit (`app.py`) for batch + live MQTT monitoring
+   - FastAPI (`backend/api.py`) for API/headless usage
+   - CLI scripts under `scripts/`
 
 ## Important Invariants
 
-- Gating is usage control after prediction.
-- Raw model prediction should remain available for analysis.
-- Baseline and PI should remain comparable under same preprocessing.
+- Gating is post-prediction usage control.
+- Raw model prediction remains available for analysis.
+- Baseline and PI must stay comparable under shared preprocessing.
+- Baseline mode must never be broken.
 
 ## Main Extension Points
 
-- New model backend: add/replace adapter in `backend/model_service.py`.
-- New API behavior: extend `backend/api.py` with versioned routes.
-- New streaming source: add ingestion adapters under `ingestion/`.
-- New reports: add scripts under `scripts/` and write artifacts under `reports/`.
-- Web UI updates: modify React components in `frontend/src/` without changing API contract.
+- New backend model: add adapter/service logic in `backend/model_service.py`.
+- API behavior changes: extend/version routes in `backend/api.py`.
+- New stream source: add under `ingestion/`.
+- New reports: add under `scripts/` and emit to `reports/`.
 
 ## Operational Modes
 
 - `Baseline`
 - `Physics-Informed`
-- `Compare (Baseline vs PI)` in UI or compare endpoint
+- `Compare (Baseline vs PI)`
 
-## Current Runtime Interfaces
+## Runtime Interfaces
 
 - Streamlit:
   `streamlit run app.py`
-- React UI (dev):
-  `cd frontend && npm install && npm run dev`
-- React UI (build + serve from FastAPI):
-  `cd frontend && npm install && npm run build`
 - FastAPI:
   `python scripts\run_api.py --host 0.0.0.0 --port 8000`
 - Headless CLI:
   `python scripts\run_headless_inference.py --csv <file> --mode Baseline`
 - MQTT ingest:
   `python ingestion\mqtt_secure_ingest.py ...`
-- MQTT simulator:
+- Digital twin publisher:
+  `python ingestion\digital_twin_streamer.py ...`
+- MQTT CSV simulator:
   `python ingestion\mqtt_simulator.py ...`
-- Edge export:
-  `python scripts\export_tflite_edge.py --mode Baseline --out-dir edge_models --quantization float16`
-- Edge benchmark:
-  `python scripts\benchmark_edge_inference.py --csv <csv> --mode Baseline --tflite <model> --reports-dir reports\edge`
 
+## Notebook Model Artifact Context
+
+The notebook `notebooks/cmapss_notebooks/predicting-remaining-useful-life-turbofan-engine.ipynb`
+exports Kaggle artifacts to `model_artifacts.zip`. This is a secondary model pipeline and should
+be integrated behind adapter boundaries when used for runtime inference.
