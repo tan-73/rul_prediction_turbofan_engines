@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
         help="Disable TLS (for local Mosquitto demo setups).",
     )
     parser.add_argument("--model-mode", default="Baseline")
+    parser.add_argument("--model-backend", default="attention")
     parser.add_argument("--min-cycles", type=int, default=DEFAULT_WINDOW_LENGTH)
     parser.add_argument("--event-log", type=Path, default=Path("logs/mqtt_events.ndjson"))
     parser.add_argument("--prediction-log", type=Path, default=Path("logs/mqtt_predictions.csv"))
@@ -152,13 +153,14 @@ def run() -> None:
 
             engine_df = pd.DataFrame(by_engine[engine_id], columns=RAW_COLUMN_NAMES)
             csv_bytes = engine_df.to_csv(index=False).encode("utf-8")
-            result = service.infer(csv_bytes, model_mode=args.model_mode)
+            result = service.infer(csv_bytes, model_mode=args.model_mode, model_backend=args.model_backend)
             rel = result["per_engine_reliability"][engine_id]
             pred = float(result["per_engine_mean_rul"][engine_id])
             out = {
                 "timestamp_utc": now,
                 "engine_id": engine_id,
                 "model_mode": args.model_mode,
+                "model_backend": args.model_backend,
                 "predicted_rul": pred,
                 "trusted_rul": float(rel["trusted_rul"]),
                 "ri": float(rel["ri"]),

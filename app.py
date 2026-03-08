@@ -13,13 +13,10 @@ try:
 except ImportError:  # pragma: no cover - optional visualization dependency.
     px = None
 
+from backend.model_service import ModelService
 from inference.attention_model import (
     RAW_COLUMN_NAMES,
-    get_model_weights_path,
-    load_attention_model,
     maintenance_status,
-    predict_rul_detailed_from_csv,
-    simulate_realtime_engine_from_df,
 )
 from inference.reliability import evaluate_reliability_log
 
@@ -28,6 +25,8 @@ st.set_page_config(page_title="Aircraft Engine RUL Predictor", layout="wide")
 st.title("Aircraft Engine RUL Predictor")
 st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
 COMPARE_MODE = "Compare (Baseline vs PI)"
+ATTENTION_BACKEND = "attention"
+ARTIFACT_BACKEND = "artifact"
 DECISION_COLORS = {"ACCEPT": "#2ca02c", "WARN": "#ff7f0e", "REJECT": "#d62728", "RAW": "#1f77b4"}
 LIVE_STATE_FILE = Path("logs") / "live_state.json"
 LIVE_PREDICTIONS_FILE = Path("logs") / "mqtt_predictions.csv"
@@ -83,8 +82,8 @@ def _read_live_predictions(limit: int = 250) -> pd.DataFrame:
 
 
 @st.cache_resource
-def get_model(model_mode: str):
-    return load_attention_model(get_model_weights_path(model_mode))
+def get_model_service() -> ModelService:
+    return ModelService()
 
 
 def build_reliability_df(result: dict) -> pd.DataFrame:
@@ -167,6 +166,12 @@ if auto_refresh and not refresh_now:
 
 
 uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
+backend_label_map = {
+    "Attention (default)": ATTENTION_BACKEND,
+    "Notebook Artifact (model_artifacts.zip)": ARTIFACT_BACKEND,
+}
+selected_backend_label = st.selectbox("Runtime Backend", options=list(backend_label_map.keys()), index=0)
+model_backend = backend_label_map[selected_backend_label]
 model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
 scenario_dir = Path("examples") / "scenarios"
 with st.expander("Demo Scenarios", expanded=False):
@@ -190,11 +195,12 @@ with st.expander("Demo Scenarios", expanded=False):
 
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
-    file_signature = (uploaded_file.name, len(file_bytes), model_mode)
+    file_signature = (uploaded_file.name, len(file_bytes), model_mode, model_backend)
     if st.session_state.get("active_file_signature") != file_signature:
         st.session_state["active_file_signature"] = file_signature
         st.session_state["active_file_bytes"] = file_bytes
         st.session_state["active_model_mode"] = model_mode
+        st.session_state["active_model_backend"] = model_backend
         st.session_state.pop("inference_result", None)
 
     try:
@@ -210,23 +216,17 @@ if uploaded_file is not None:
     st.dataframe(preview_df)
 
     if st.button("Run RUL Inference"):
-        with st.spinner("Running attention model inference..."):
+        with st.spinner("Running model inference..."):
             try:
-                payload = io.BytesIO(st.session_state["active_file_bytes"])
+                service = get_model_service()
+                payload = st.session_state["active_file_bytes"]
                 if model_mode == COMPARE_MODE:
-                    baseline_model = get_model("Baseline")
-                    pi_model = get_model("Physics-Informed")
-                    baseline_result = predict_rul_detailed_from_csv(payload, model=baseline_model)
-                    payload.seek(0)
-                    pi_result = predict_rul_detailed_from_csv(payload, model=pi_model)
-                    st.session_state["compare_result"] = {
-                        "baseline": baseline_result,
-                        "pi": pi_result,
-                    }
+                    if model_backend != ATTENTION_BACKEND:
+                        raise ValueError("Compare mode currently supports Attention backend only.")
+                    st.session_state["compare_result"] = service.compare(payload, model_backend=model_backend)
                     st.session_state.pop("inference_result", None)
                 else:
-                    model = get_model(model_mode)
-                    result = predict_rul_detailed_from_csv(payload, model=model)
+                    result = service.infer(payload, model_mode=model_mode, model_backend=model_backend)
                     st.session_state["inference_result"] = result
                     st.session_state.pop("compare_result", None)
             except FileNotFoundError as exc:
@@ -246,7 +246,7 @@ if uploaded_file is not None:
     if st.session_state.get("active_model_mode") == COMPARE_MODE and "compare_result" in st.session_state:
         compare_result = st.session_state["compare_result"]
         baseline_result = compare_result["baseline"]
-        pi_result = compare_result["pi"]
+        pi_result = compare_result["physics_informed"]
         engine_ids = sorted(set(baseline_result["engine_ids"]) & set(pi_result["engine_ids"]))
 
         rows = []
@@ -339,7 +339,7 @@ if uploaded_file is not None:
     if "inference_result" in st.session_state:
         result = st.session_state["inference_result"]
         active_mode = st.session_state.get("active_model_mode", model_mode)
-        model = get_model(active_mode)
+        active_backend = st.session_state.get("active_model_backend", model_backend)
         predictions = result["per_engine_mean_rul"]
         overall_rul = float(result["overall_mean_rul"])
         overall_ri = float(result["overall_reliability_index"])
@@ -351,7 +351,10 @@ if uploaded_file is not None:
         metric_col_2.metric("Fleet Engines", len(predictions))
         metric_col_3.metric("Status", maintenance_status(overall_rul))
         metric_col_4.metric("Reliability Index (RI)", f"{overall_ri:.2f}")
-        st.caption(f"Active model mode: {st.session_state.get('active_model_mode', model_mode)}")
+        st.caption(
+            f"Active model mode: {st.session_state.get('active_model_mode', model_mode)} | "
+            f"backend: {active_backend}"
+        )
 
         normalized = max(0.0, min(1.0, overall_rul / 125.0))
         st.progress(normalized, text="RUL score normalized to 0-125")
@@ -462,12 +465,14 @@ if uploaded_file is not None:
             stream_step = st.slider("Replay step (cycles)", min_value=1, max_value=5, value=1)
             if st.button("Run Streaming Replay"):
                 with st.spinner("Simulating real-time RUL updates..."):
-                    stream_df = simulate_realtime_engine_from_df(
-                        raw_df=raw_df,
+                    replay = get_model_service().replay(
+                        st.session_state["active_file_bytes"],
+                        model_mode=active_mode,
                         engine_id=int(stream_engine),
-                        model=model,
                         step=int(stream_step),
+                        model_backend=active_backend,
                     )
+                    stream_df = pd.DataFrame(replay["rows"])
                 st.dataframe(stream_df, use_container_width=True)
                 if px is not None:
                     stream_long = stream_df.melt(
