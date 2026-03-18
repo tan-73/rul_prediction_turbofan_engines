@@ -3,11 +3,12 @@ from __future__ import annotations
 import io
 import threading
 from dataclasses import dataclass
-from typing import Dict, Protocol, Tuple
+from typing import Callable, Dict, List, Protocol, Tuple
 
 import pandas as pd
 
 from backend.artifact_backend import NotebookArtifactRunner, build_artifact_result
+from backend.pi_lightgbm_backend import PILightGBMAdapter
 from inference.attention_model import (
     get_model_weights_path,
     load_attention_model,
@@ -131,8 +132,99 @@ class ArtifactModelAdapter:
         return pd.DataFrame(rows)
 
 
-class ModelService:
+# ---------------------------------------------------------------------------
+# Backend Registry — plug-and-play model backend management
+# ---------------------------------------------------------------------------
+
+AdapterFactory = Callable[[str], ModelAdapter]
+
+
+class BackendRegistry:
+    """Central registry that maps backend names → adapter factories."""
+
     def __init__(self) -> None:
+        self._factories: Dict[str, Tuple[AdapterFactory, str, List[str]]] = {}
+
+    def register(
+        self,
+        name: str,
+        factory: AdapterFactory,
+        description: str = "",
+        aliases: List[str] | None = None,
+    ) -> None:
+        canonical = name.strip().lower()
+        self._factories[canonical] = (factory, description, aliases or [])
+        for alias in (aliases or []):
+            self._factories[alias.strip().lower()] = (factory, description, [])
+
+    def get_factory(self, name: str) -> AdapterFactory:
+        canonical = name.strip().lower()
+        entry = self._factories.get(canonical)
+        if entry is None:
+            raise ValueError(
+                f"Unknown backend: '{name}'. Available: {self.list_names()}"
+            )
+        return entry[0]
+
+    def list_names(self) -> List[str]:
+        """Return canonical backend names (no aliases)."""
+        seen: set[str] = set()
+        names: List[str] = []
+        for key, (_, _, aliases) in self._factories.items():
+            # Skip alias entries — only list canonical names
+            all_aliases = {a.strip().lower() for a in aliases}
+            if key not in all_aliases and key not in seen:
+                names.append(key)
+                seen.add(key)
+        return sorted(names)
+
+    def list_backends(self) -> List[Dict[str, str]]:
+        """Return backend info dicts for UI display."""
+        result: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        for key, (_, description, aliases) in self._factories.items():
+            all_aliases = {a.strip().lower() for a in aliases}
+            if key not in all_aliases and key not in seen:
+                result.append({"name": key, "description": description})
+                seen.add(key)
+        return sorted(result, key=lambda d: d["name"])
+
+
+# Global default registry
+_default_registry = BackendRegistry()
+
+# Register built-in backends
+_default_registry.register(
+    "attention",
+    lambda mode: AttentionModelAdapter(mode),
+    description="Attention GRU (Baseline / Physics-Informed)",
+    aliases=["default"],
+)
+_default_registry.register(
+    "artifact",
+    lambda mode: ArtifactModelAdapter(mode),
+    description="LightGBM from model_artifacts.zip",
+    aliases=["model-artifact", "model_artifact", "lightgbm", "notebook-artifact"],
+)
+_default_registry.register(
+    "pi-lightgbm",
+    lambda mode: PILightGBMAdapter(mode),
+    description="Physics-Informed LightGBM (LightGBM + physics constraints)",
+    aliases=["pi_lightgbm", "physics-lightgbm"],
+)
+
+
+def get_default_registry() -> BackendRegistry:
+    return _default_registry
+
+
+# ---------------------------------------------------------------------------
+# ModelService — the main entry point
+# ---------------------------------------------------------------------------
+
+class ModelService:
+    def __init__(self, registry: BackendRegistry | None = None) -> None:
+        self._registry = registry or get_default_registry()
         self._adapters: Dict[Tuple[str, str], ModelAdapter] = {}
         self._lock = threading.Lock()
 
@@ -145,28 +237,18 @@ class ModelService:
             return "Physics-Informed"
         raise ValueError(f"Unsupported model_mode: {model_mode}")
 
-    @staticmethod
-    def _normalize_backend(model_backend: str) -> str:
-        backend = model_backend.strip().lower()
-        if backend in {"attention", "default"}:
-            return "attention"
-        if backend in {"artifact", "model-artifact", "model_artifact", "lightgbm", "notebook-artifact"}:
-            return "artifact"
-        raise ValueError(f"Unsupported model_backend: {model_backend}")
-
     def _get_adapter(self, model_mode: str, model_backend: str) -> ModelAdapter:
         mode = self._normalize_mode(model_mode)
-        backend = self._normalize_backend(model_backend)
+        backend = model_backend.strip().lower()
         key = (backend, mode)
         with self._lock:
             if key not in self._adapters:
-                if backend == "attention":
-                    self._adapters[key] = AttentionModelAdapter(mode)
-                elif backend == "artifact":
-                    self._adapters[key] = ArtifactModelAdapter(mode)
-                else:  # pragma: no cover - backend normalization guard.
-                    raise ValueError(f"Unsupported model_backend: {model_backend}")
+                factory = self._registry.get_factory(backend)
+                self._adapters[key] = factory(mode)
             return self._adapters[key]
+
+    def list_backends(self) -> List[Dict[str, str]]:
+        return self._registry.list_backends()
 
     def infer(self, csv_bytes: bytes, model_mode: str, model_backend: str = "attention") -> Dict[str, object]:
         adapter = self._get_adapter(model_mode, model_backend)

@@ -46,6 +46,11 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/v1/backends")
+def list_backends() -> List[Dict[str, str]]:
+    return model_service.list_backends()
+
+
 @app.get("/")
 def ui_home():
     if FRONTEND_INDEX.exists():
@@ -103,4 +108,3 @@ def replay_from_rows(req: ReplayRequest) -> Dict[str, object]:
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-

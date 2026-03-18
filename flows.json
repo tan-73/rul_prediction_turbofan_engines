@@ -1,0 +1,2004 @@
+[
+    {
+        "id": "c401f2a6b79db91d",
+        "type": "tab",
+        "label": "Flow 5",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "cmt_vib",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION A — VIBRATION MONITORING (5 sensors @ 500ms) — Fan, HPC/LPC Blade, Bearing, Casing",
+        "info": "",
+        "x": 460,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "cmt_thermal",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION B — THERMAL MONITORING (5 sensors @ 1s) — EGT, Core, Inlet, Oil, ITT — RBE noise filter inline",
+        "info": "",
+        "x": 450,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "cmt_pressure",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION C — PRESSURE (4 sensors) + FLOW (3 sensors) @ 2s — Combustor alert switch",
+        "info": "",
+        "x": 450,
+        "y": 640,
+        "wires": []
+    },
+    {
+        "id": "cmt_mech",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION D — MECHANICAL SENSORS (Fan RPM, Core RPM N2, Shaft Torque) @ 1s",
+        "info": "",
+        "x": 450,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "cmt_rul",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION E — cVAE-RUL MODEL PIPELINE — C-MAPSS 20-feature aggregator → physics dual-head → gate",
+        "info": "",
+        "x": 450,
+        "y": 1060,
+        "wires": []
+    },
+    {
+        "id": "cmt_mqtt",
+        "type": "comment",
+        "z": "c401f2a6b79db91d",
+        "name": "SECTION F — MQTT DIGITAL TWIN PUBLISHER (engine/rul, engine/sensors/all)",
+        "info": "",
+        "x": 450,
+        "y": 1420,
+        "wires": []
+    },
+    {
+        "id": "inj_vib",
+        "type": "inject",
+        "z": "c401f2a6b79db91d",
+        "name": "Vibration Tick 500ms",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "0.5",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.2,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 460,
+        "y": 240,
+        "wires": [
+            [
+                "fn_vib_sim"
+            ]
+        ]
+    },
+    {
+        "id": "inj_main",
+        "type": "inject",
+        "z": "c401f2a6b79db91d",
+        "name": "Main Tick 1s",
+        "props": [
+            {
+                "p": "payload",
+                "v": "",
+                "vt": "date"
+            }
+        ],
+        "repeat": "1",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.3,
+        "topic": "",
+        "x": 460,
+        "y": 460,
+        "wires": [
+            [
+                "fn_thermal_sim",
+                "fn_mechanical_sim"
+            ]
+        ]
+    },
+    {
+        "id": "inj_slow",
+        "type": "inject",
+        "z": "c401f2a6b79db91d",
+        "name": "Slow Tick 2s",
+        "props": [
+            {
+                "p": "payload",
+                "v": "",
+                "vt": "date"
+            }
+        ],
+        "repeat": "2",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.4,
+        "topic": "",
+        "x": 460,
+        "y": 700,
+        "wires": [
+            [
+                "fn_pressure_sim",
+                "fn_flow_sim"
+            ]
+        ]
+    },
+    {
+        "id": "inj_rul",
+        "type": "inject",
+        "z": "c401f2a6b79db91d",
+        "name": "RUL Model Tick 1s",
+        "props": [
+            {
+                "p": "payload",
+                "v": "",
+                "vt": "date"
+            }
+        ],
+        "repeat": "1",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.6,
+        "topic": "",
+        "x": 460,
+        "y": 1100,
+        "wires": [
+            [
+                "fn_sensor_agg"
+            ]
+        ]
+    },
+    {
+        "id": "fn_vib_sim",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Vibration Sensor Simulator",
+        "func": "let cycle = global.get('cycle') || 0;\nconst deg = Math.min(cycle, 100) / 100;\nfunction n(b, noise) { return +(b + (Math.random()-0.5)*2*noise).toFixed(2); }\nconst fanBlade = n(0.4  + deg * 5.2, 0.12);\nconst hpcBlade = n(0.3  + deg * 4.1, 0.10);\nconst lpcBlade = n(0.2  + deg * 3.0, 0.08);\nconst bearing  = n(0.1  + deg * 3.8, 0.15);\nconst casing   = n(0.3  + deg * 2.5, 0.09);\nconst maxVib   = Math.max(fanBlade, hpcBlade, lpcBlade, bearing, casing);\nmsg.payload    = {fanBlade, hpcBlade, lpcBlade, bearing, casing, maxVib};\nreturn msg;",
+        "outputs": 1,
+        "x": 690,
+        "y": 240,
+        "wires": [
+            [
+                "sw_vib_thresh",
+                "fn_vib_split"
+            ]
+        ]
+    },
+    {
+        "id": "sw_vib_thresh",
+        "type": "switch",
+        "z": "c401f2a6b79db91d",
+        "name": "Vib Threshold Alert",
+        "property": "payload.maxVib",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "gte",
+                "v": "3.5",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 1,
+        "x": 910,
+        "y": 200,
+        "wires": [
+            [
+                "fn_vib_alert"
+            ]
+        ]
+    },
+    {
+        "id": "fn_vib_alert",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Vibration Alert Formatter",
+        "func": "const v = msg.payload.maxVib;\nmsg.payload = {time: new Date().toLocaleTimeString(), sensor:'Vibration', value:v.toFixed(2)+' mm/s', level: v > 5 ? 'CRITICAL':'WARNING', color: v > 5 ? '#d50000':'#ff6f00'};\nreturn msg;",
+        "outputs": 1,
+        "x": 1140,
+        "y": 200,
+        "wires": [
+            [
+                "link_out_alerts",
+                "debug_vib"
+            ]
+        ]
+    },
+    {
+        "id": "debug_vib",
+        "type": "debug",
+        "z": "c401f2a6b79db91d",
+        "name": "Vib Alert",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1330,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "fn_vib_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Vibration Splitter (5 outputs)",
+        "func": "const d = msg.payload;\nreturn [\n  {payload: d.fanBlade},\n  {payload: d.hpcBlade},\n  {payload: d.lpcBlade},\n  {payload: d.bearing},\n  {payload: d.casing}\n];",
+        "outputs": 5,
+        "x": 910,
+        "y": 280,
+        "wires": [
+            [
+                "g_fan_vib"
+            ],
+            [
+                "g_hpc_vib"
+            ],
+            [
+                "g_lpc_vib"
+            ],
+            [
+                "g_bearing"
+            ],
+            [
+                "g_casing"
+            ]
+        ]
+    },
+    {
+        "id": "g_fan_vib",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_vib",
+        "order": 1,
+        "width": "2",
+        "height": "2",
+        "gtype": "gage",
+        "title": "Fan Blade Vib",
+        "label": "mm/s",
+        "format": "{{value}}",
+        "min": "0",
+        "max": "6",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "2",
+        "seg2": "4",
+        "x": 1170,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "g_hpc_vib",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_vib",
+        "order": 2,
+        "width": "2",
+        "height": "2",
+        "gtype": "gage",
+        "title": "HPC Blade Vib",
+        "label": "mm/s",
+        "format": "{{value}}",
+        "min": "0",
+        "max": "5",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "1.5",
+        "seg2": "3",
+        "x": 1170,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "g_lpc_vib",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_vib",
+        "order": 3,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "LPC Blade Vib",
+        "label": "mm/s",
+        "format": "{{value}}",
+        "min": "0",
+        "max": "4",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "1.2",
+        "seg2": "2.5",
+        "x": 1170,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "g_bearing",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_vib",
+        "order": 4,
+        "width": "2",
+        "height": "2",
+        "gtype": "wave",
+        "title": "Bearing Vibration",
+        "label": "mm/s",
+        "format": "{{value}}",
+        "min": "0",
+        "max": "4",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "1.5",
+        "seg2": "3",
+        "x": 1170,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "g_casing",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_vib",
+        "order": 5,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "Casing Resonance",
+        "label": "mm/s",
+        "format": "{{value}}",
+        "min": "0",
+        "max": "3.5",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "1",
+        "seg2": "2.5",
+        "x": 1170,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "fn_thermal_sim",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Thermal Sensor Simulator",
+        "func": "let cycle = global.get('cycle') || 0;\nconst deg = Math.min(cycle, 100) / 100;\nfunction n(b, noise) { return +(b + (Math.random()-0.5)*2*noise).toFixed(1); }\nmsg.payload = {\n  egt:    n(450 + deg * 280, 5),\n  coreT:  n(380 + deg * 140, 4),\n  inletT: n(25  + deg * 35,  2),\n  oilT:   n(60  + deg * 80,  2.5),\n  itt:    n(420 + deg * 200, 4.5)\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 690,
+        "y": 460,
+        "wires": [
+            [
+                "rbe_thermal"
+            ]
+        ]
+    },
+    {
+        "id": "rbe_thermal",
+        "type": "rbe",
+        "z": "c401f2a6b79db91d",
+        "name": "RBE — Noise Filter",
+        "func": "rbe",
+        "gap": "",
+        "start": "",
+        "inout": "out",
+        "septopics": true,
+        "property": "payload",
+        "topi": "topic",
+        "x": 900,
+        "y": 460,
+        "wires": [
+            [
+                "fn_thermal_split"
+            ]
+        ]
+    },
+    {
+        "id": "fn_thermal_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Thermal Splitter (5 outputs)",
+        "func": "const d = msg.payload;\nreturn [\n  {payload: d.egt},\n  {payload: d.coreT},\n  {payload: d.inletT},\n  {payload: d.oilT},\n  {payload: d.itt}\n];",
+        "outputs": 5,
+        "x": 1120,
+        "y": 460,
+        "wires": [
+            [
+                "g_egt"
+            ],
+            [
+                "g_core_temp"
+            ],
+            [
+                "g_inlet_temp"
+            ],
+            [
+                "g_oil_temp"
+            ],
+            [
+                "g_itt"
+            ]
+        ]
+    },
+    {
+        "id": "g_egt",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_thermal",
+        "order": 1,
+        "width": "2",
+        "height": "2",
+        "gtype": "gage",
+        "title": "Exhaust Gas Temp",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": "400",
+        "max": "800",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "560",
+        "seg2": "680",
+        "x": 1330,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "g_core_temp",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_thermal",
+        "order": 2,
+        "width": "2",
+        "height": "2",
+        "gtype": "gage",
+        "title": "Core Temperature",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": "350",
+        "max": "560",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "440",
+        "seg2": "500",
+        "x": 1330,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "g_inlet_temp",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_thermal",
+        "order": 3,
+        "width": "2",
+        "height": "2",
+        "gtype": "wave",
+        "title": "Inlet Temperature",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": "20",
+        "max": "80",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "40",
+        "seg2": "60",
+        "x": 1330,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "g_oil_temp",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_thermal",
+        "order": 4,
+        "width": "2",
+        "height": "2",
+        "gtype": "wave",
+        "title": "Oil Temperature",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": "50",
+        "max": "160",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "90",
+        "seg2": "130",
+        "x": 1330,
+        "y": 540,
+        "wires": []
+    },
+    {
+        "id": "g_itt",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_thermal",
+        "order": 5,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "Inter-Turbine Temp",
+        "label": "°C",
+        "format": "{{value}}",
+        "min": "400",
+        "max": "700",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "520",
+        "seg2": "620",
+        "x": 1330,
+        "y": 580,
+        "wires": []
+    },
+    {
+        "id": "fn_pressure_sim",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Pressure Sensor Simulator",
+        "func": "let cycle = global.get('cycle') || 0;\nconst deg = Math.min(cycle, 100) / 100;\nfunction n(b, noise) { return +(b + (Math.random()-0.5)*2*noise).toFixed(2); }\nconst inletP = n(101.3 - deg * 5,   0.5);\nconst compP  = n(1200  + deg * 150, 10);\nconst combP  = n(1180  - deg * 200,  8);\nconst turbP  = n(350   - deg * 60,   5);\nmsg.payload  = {inletP, compP, combP, turbP};\nreturn msg;",
+        "outputs": 1,
+        "x": 690,
+        "y": 700,
+        "wires": [
+            [
+                "sw_pressure_thresh",
+                "fn_pressure_split"
+            ]
+        ]
+    },
+    {
+        "id": "sw_pressure_thresh",
+        "type": "switch",
+        "z": "c401f2a6b79db91d",
+        "name": "Combustor Pressure Alert",
+        "property": "payload.combP",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "lt",
+                "v": "980",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 1,
+        "x": 920,
+        "y": 660,
+        "wires": [
+            [
+                "fn_pressure_alert"
+            ]
+        ]
+    },
+    {
+        "id": "fn_pressure_alert",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Pressure Alert Formatter",
+        "func": "msg.payload = {time: new Date().toLocaleTimeString(), sensor:'Combustor Pressure', value: msg.payload.combP.toFixed(0)+' kPa', level:'WARNING', color:'#ff6f00'};\nreturn msg;",
+        "outputs": 1,
+        "x": 1160,
+        "y": 660,
+        "wires": [
+            [
+                "link_out_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "fn_pressure_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Pressure Splitter (4 outputs)",
+        "func": "const d = msg.payload;\nreturn [\n  {payload: d.inletP},\n  {payload: d.compP},\n  {payload: d.combP},\n  {payload: d.turbP}\n];",
+        "outputs": 4,
+        "x": 920,
+        "y": 740,
+        "wires": [
+            [
+                "g_inlet_p"
+            ],
+            [
+                "g_comp_p"
+            ],
+            [
+                "g_comb_p"
+            ],
+            [
+                "g_turb_p"
+            ]
+        ]
+    },
+    {
+        "id": "g_inlet_p",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_pressure",
+        "order": 1,
+        "width": "3",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Inlet Total Pressure",
+        "label": "kPa",
+        "format": "{{value}}",
+        "min": "95",
+        "max": "110",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "98",
+        "seg2": "100",
+        "x": 1170,
+        "y": 680,
+        "wires": []
+    },
+    {
+        "id": "g_comp_p",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_pressure",
+        "order": 2,
+        "width": "3",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Compressor Outlet P",
+        "label": "kPa",
+        "format": "{{value}}",
+        "min": "1100",
+        "max": "1400",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "1250",
+        "seg2": "1340",
+        "x": 1170,
+        "y": 720,
+        "wires": []
+    },
+    {
+        "id": "g_comb_p",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_pressure",
+        "order": 3,
+        "width": "3",
+        "height": "3",
+        "gtype": "donut",
+        "title": "Combustor Pressure",
+        "label": "kPa",
+        "format": "{{value}}",
+        "min": "900",
+        "max": "1200",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "1000",
+        "seg2": "1100",
+        "x": 1170,
+        "y": 760,
+        "wires": []
+    },
+    {
+        "id": "g_turb_p",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_pressure",
+        "order": 4,
+        "width": "3",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Turbine Outlet P",
+        "label": "kPa",
+        "format": "{{value}}",
+        "min": "270",
+        "max": "380",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "290",
+        "seg2": "340",
+        "x": 1170,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "fn_flow_sim",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Flow and Fuel Simulator",
+        "func": "let cycle = global.get('cycle') || 0;\nconst deg = Math.min(cycle, 100) / 100;\nfunction n(b, noise) { return +(b + (Math.random()-0.5)*2*noise).toFixed(2); }\nmsg.payload = {\n  fuelFlow: n(2.8 + deg * 0.8,  0.05),\n  airFlow:  n(85  - deg * 12,   1.0),\n  oilFlow:  n(4.5 - deg * 1.2,  0.08)\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 690,
+        "y": 840,
+        "wires": [
+            [
+                "chg_flow_units"
+            ]
+        ]
+    },
+    {
+        "id": "chg_flow_units",
+        "type": "change",
+        "z": "c401f2a6b79db91d",
+        "name": "Tag as Flow Data",
+        "rules": [
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "flow_data",
+                "tot": "str"
+            },
+            {
+                "t": "set",
+                "p": "source",
+                "pt": "msg",
+                "to": "FlowSimulator_v1",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 900,
+        "y": 840,
+        "wires": [
+            [
+                "fn_flow_split"
+            ]
+        ]
+    },
+    {
+        "id": "fn_flow_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Flow Splitter (3 outputs)",
+        "func": "const d = msg.payload;\nreturn [\n  {payload: d.fuelFlow},\n  {payload: d.airFlow},\n  {payload: d.oilFlow}\n];",
+        "outputs": 3,
+        "x": 1120,
+        "y": 840,
+        "wires": [
+            [
+                "g_fuel_flow"
+            ],
+            [
+                "g_air_flow"
+            ],
+            [
+                "g_oil_flow"
+            ]
+        ]
+    },
+    {
+        "id": "g_fuel_flow",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_flow",
+        "order": 1,
+        "width": "4",
+        "height": "3",
+        "gtype": "wave",
+        "title": "Fuel Flow Rate",
+        "label": "kg/s",
+        "format": "{{value}}",
+        "min": "2",
+        "max": "5",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "3",
+        "seg2": "4",
+        "x": 1350,
+        "y": 820,
+        "wires": []
+    },
+    {
+        "id": "g_air_flow",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_flow",
+        "order": 2,
+        "width": "4",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Air Mass Flow",
+        "label": "kg/s",
+        "format": "{{value}}",
+        "min": "60",
+        "max": "95",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "70",
+        "seg2": "80",
+        "x": 1350,
+        "y": 860,
+        "wires": []
+    },
+    {
+        "id": "g_oil_flow",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_flow",
+        "order": 3,
+        "width": "4",
+        "height": "3",
+        "gtype": "wave",
+        "title": "Oil Flow Rate",
+        "label": "L/min",
+        "format": "{{value}}",
+        "min": "2",
+        "max": "5",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "3.5",
+        "seg2": "4.2",
+        "x": 1350,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "fn_mechanical_sim",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Mechanical Sensor Simulator",
+        "func": "let cycle = global.get('cycle') || 0;\nconst deg = Math.min(cycle, 100) / 100;\nconst fanRPM  = +(3200 - deg * 500 + (Math.random()-0.5)*40).toFixed(0);\nconst coreRPM = +(9800 - deg * 1200 + (Math.random()-0.5)*100).toFixed(0);\nconst torque  = +(150  + deg * 80   + (Math.random()-0.5)*10).toFixed(1);\nmsg.payload = {fanRPM, coreRPM, torque};\nreturn msg;",
+        "outputs": 1,
+        "x": 690,
+        "y": 940,
+        "wires": [
+            [
+                "fn_mech_split"
+            ]
+        ]
+    },
+    {
+        "id": "fn_mech_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Mechanical Splitter (3 outputs)",
+        "func": "const d = msg.payload;\nreturn [\n  {payload: d.fanRPM},\n  {payload: d.coreRPM},\n  {payload: d.torque}\n];",
+        "outputs": 3,
+        "x": 910,
+        "y": 940,
+        "wires": [
+            [
+                "g_fan_rpm"
+            ],
+            [
+                "g_core_rpm"
+            ],
+            [
+                "g_torque"
+            ]
+        ]
+    },
+    {
+        "id": "g_fan_rpm",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_mechanical",
+        "order": 1,
+        "width": "4",
+        "height": "3",
+        "gtype": "donut",
+        "title": "Fan Speed (N1)",
+        "label": "RPM",
+        "format": "{{value}}",
+        "min": "2600",
+        "max": "3300",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "2800",
+        "seg2": "3000",
+        "x": 1130,
+        "y": 920,
+        "wires": []
+    },
+    {
+        "id": "g_core_rpm",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_mechanical",
+        "order": 2,
+        "width": "4",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Core Speed (N2)",
+        "label": "RPM",
+        "format": "{{value}}",
+        "min": "8000",
+        "max": "10000",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "8600",
+        "seg2": "9200",
+        "x": 1130,
+        "y": 960,
+        "wires": []
+    },
+    {
+        "id": "g_torque",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_mechanical",
+        "order": 3,
+        "width": "4",
+        "height": "3",
+        "gtype": "gage",
+        "title": "Shaft Torque",
+        "label": "N·m",
+        "format": "{{value}}",
+        "min": "100",
+        "max": "250",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "170",
+        "seg2": "210",
+        "x": 1130,
+        "y": 1000,
+        "wires": []
+    },
+    {
+        "id": "fn_sensor_agg",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Sensor Aggregator — C-MAPSS 20-Feature Vector",
+        "func": "let cycle = global.get('cycle') || 0;\nlet speed  = global.get('deg_speed') || 1;\ncycle = Math.min(100, cycle + speed);\nglobal.set('cycle', cycle);\nconst deg = cycle / 100;\nfunction n(b, noise) { return +(b + (Math.random()-0.5)*2*noise).toFixed(3); }\nmsg.payload = {\n  cycle: Math.round(cycle), deg,\n  s1:  n(518.67 + deg*20,    3),   // T2  — fan inlet total temp\n  s2:  n(643.02 + deg*30,    5),   // T24 — LPC outlet temp\n  s3:  n(1589   + deg*60,   10),   // T30 — HPC outlet temp\n  s4:  n(1400   + deg*90,   12),   // T50 — LPT outlet temp\n  s5:  n(14.62  + deg*1.5,   0.2), // P2  — inlet pressure\n  s6:  n(21.61  - deg*2.0,   0.3), // P15 — bypass duct pressure\n  s7:  n(554.36 - deg*50,    5),   // Nf  — physical fan speed\n  s8:  n(2388   - deg*120,  20),   // Nc  — physical core speed\n  s9:  n(9062   - deg*250,  30),   // Ps30 — HPC static pressure\n  s10: n(1.30   + deg*0.35,  0.02),// phi  — fuel-air ratio\n  s11: n(47.47  - deg*6,     0.5), // NRf  — corrected fan speed\n  s12: n(522    - deg*25,    4),   // NRc  — corrected core speed\n  s13: n(2388   - deg*120,  20),   // BPR  — bypass ratio proxy\n  s14: n(8138   - deg*180,  30),   // farB — burn fuel-air ratio\n  s15: n(9.234  + deg*0.6,   0.1), // htBleed — bleed enthalpy\n  s16: n(14.62  + deg*1.0,   0.15),// Nf_dmd — demanded fan speed\n  s17: n(23.38  + deg*1.2,   0.3), // PCNfR_dmd — demanded corrected fan speed\n  s18: n(100    - deg*20,    1),   // W31 — HPT coolant bleed\n  s19: n(38.19  - deg*8,     0.5), // W32 — LPT coolant bleed\n  s20: n(9.234  + deg*0.6,   0.1)  // htBleed proxy 2\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 710,
+        "y": 1140,
+        "wires": [
+            [
+                "delay_pipeline",
+                "debug_raw"
+            ]
+        ]
+    },
+    {
+        "id": "debug_raw",
+        "type": "debug",
+        "z": "c401f2a6b79db91d",
+        "name": "Raw 20-Feature Vector",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 720,
+        "y": 1220,
+        "wires": []
+    },
+    {
+        "id": "delay_pipeline",
+        "type": "delay",
+        "z": "c401f2a6b79db91d",
+        "name": "Inference Latency 150ms",
+        "pauseType": "delay",
+        "timeout": "150",
+        "timeoutUnits": "milliseconds",
+        "rate": "1",
+        "nbRateUnits": "1",
+        "rateUnits": "second",
+        "randomFirst": "1",
+        "randomLast": "5",
+        "randomUnits": "seconds",
+        "drop": false,
+        "outputs": 1,
+        "x": 930,
+        "y": 1140,
+        "wires": [
+            [
+                "fn_rul_model"
+            ]
+        ]
+    },
+    {
+        "id": "fn_rul_model",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "cVAE-RUL Model — Dual-Head Output",
+        "func": "const d = msg.payload;\nconst deg = d.deg;\n\n// Head A: Probabilistic RUL Distribution (mean + CI)\nconst trueRUL = Math.max(0, 100 - d.cycle);\nconst predRUL = Math.max(0, trueRUL + (Math.random()-0.5)*8);\nconst variance = 3 + deg * 15;\nconst ciLow  = +Math.max(0, predRUL - variance).toFixed(1);\nconst ciHigh = +(predRUL + variance).toFixed(1);\n\n// Head B: Physics-Violation Risk Score\n// Checks degradation monotonicity + thermodynamic bounds (C-MAPSS thresholds)\nlet physRisk = 0;\nif (d.s3 > 1620) physRisk += 0.25;  // HPC outlet overtemp (T30)\nif (d.s4 > 1450) physRisk += 0.25;  // LPT overtemp (T50) — turbine inlet limit\nif (d.s9 < 8500) physRisk += 0.20;  // HPC pressure drop (Ps30)\nif (d.s18 < 88)  physRisk += 0.15;  // HPT coolant bleed depletion (W31)\nif (d.s19 < 32)  physRisk += 0.15;  // LPT coolant bleed depletion (W32)\nphysRisk = Math.min(1.0, physRisk);\n\n// CPC — Counterfactual Physical Consistency Score\nconst cpc = +(1 - physRisk).toFixed(2);\n\n// Component Health Scores (0-100)\nconst health = {\n  fan:       +Math.max(0, 100 - deg*62 - Math.random()*5).toFixed(0),\n  hpc:       +Math.max(0, 100 - deg*72 - Math.random()*6).toFixed(0),\n  combustor: +Math.max(0, 100 - deg*55 - Math.random()*4).toFixed(0),\n  hpt:       +Math.max(0, 100 - deg*68 - Math.random()*5).toFixed(0),\n  lpt:       +Math.max(0, 100 - deg*58 - Math.random()*4).toFixed(0),\n  bearing:   +Math.max(0, 100 - deg*85 - Math.random()*6).toFixed(0)\n};\n\n// Reliability Gating: ACCEPT / WARN / REJECT\nlet gate = 'ACCEPT';\nif (predRUL <= 40 || physRisk > 0.25) gate = 'WARN';\nif (predRUL <= 18 || physRisk > 0.55) gate = 'REJECT';\n\nmsg.payload = Object.assign({}, d, {predRUL: +predRUL.toFixed(1), ciLow, ciHigh, physRisk: +physRisk.toFixed(2), cpc, gate, health});\nreturn msg;",
+        "outputs": 1,
+        "x": 1170,
+        "y": 1140,
+        "wires": [
+            [
+                "fn_rul_split",
+                "sw_gate_check",
+                "fn_health_split",
+                "fn_mqtt_format"
+            ]
+        ]
+    },
+    {
+        "id": "sw_gate_check",
+        "type": "switch",
+        "z": "c401f2a6b79db91d",
+        "name": "Gate Alert Router",
+        "property": "payload.gate",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "WARN",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "REJECT",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 2,
+        "x": 1390,
+        "y": 1060,
+        "wires": [
+            [
+                "fn_gate_alert"
+            ],
+            [
+                "fn_gate_alert"
+            ]
+        ]
+    },
+    {
+        "id": "fn_gate_alert",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Gate Alert Formatter",
+        "func": "const g = msg.payload.gate;\nmsg.payload = {\n  time:   new Date().toLocaleTimeString(),\n  sensor: 'RUL Gate',\n  value:  'RUL=' + msg.payload.predRUL + ' cyc, Risk=' + (msg.payload.physRisk*100).toFixed(0) + '%',\n  level:  g,\n  color:  g === 'REJECT' ? '#d50000' : '#ff6f00'\n};\nreturn msg;",
+        "outputs": 1,
+        "x": 1630,
+        "y": 1060,
+        "wires": [
+            [
+                "link_out_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "fn_rul_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "RUL Dashboard Splitter (5 outputs)",
+        "func": "const d = msg.payload;\nconst g = d.gate;\nconst gLabel = g === 'ACCEPT' ? '✅  ACCEPT' : g === 'WARN' ? '⚠️   WARN' : '🔴 REJECT';\nreturn [\n  {payload: +d.predRUL.toFixed(1)},\n  {payload: gLabel + '\\nRUL: ' + d.predRUL + ' cycles\\nCI: [' + d.ciLow + ' – ' + d.ciHigh + ']\\nPhysics Risk: ' + (d.physRisk*100).toFixed(0) + '%\\nCPC: ' + (d.cpc*100).toFixed(0) + '%'},\n  {payload: +(d.cpc*100).toFixed(0)},\n  {payload: +(d.physRisk*100).toFixed(0)},\n  {payload: 'Cycle ' + d.cycle + ' / 100   |   Degradation: ' + (d.deg*100).toFixed(0) + '%'}\n];",
+        "outputs": 5,
+        "x": 1410,
+        "y": 1160,
+        "wires": [
+            [
+                "chart_rul"
+            ],
+            [
+                "text_gate"
+            ],
+            [
+                "g_cpc"
+            ],
+            [
+                "g_phys_risk"
+            ],
+            [
+                "text_cycle"
+            ]
+        ]
+    },
+    {
+        "id": "chart_rul",
+        "type": "ui_chart",
+        "z": "c401f2a6b79db91d",
+        "name": "RUL Trend Chart",
+        "group": "grp_rul",
+        "order": 1,
+        "width": "12",
+        "height": "4",
+        "label": "Predicted Remaining Useful Life (cycles)",
+        "chartType": "line",
+        "legend": "false",
+        "xformat": "auto",
+        "interpolate": "bezier",
+        "nodata": "Waiting for data...",
+        "dot": false,
+        "ymin": "0",
+        "ymax": "105",
+        "removeOlder": 1,
+        "removeOlderPoints": "100",
+        "removeOlderUnit": "3600",
+        "cutout": 0,
+        "useOneColor": false,
+        "useUTC": false,
+        "colors": [
+            "#1565c0",
+            "#43a047",
+            "#e53935"
+        ],
+        "outputs": 1,
+        "x": 250,
+        "y": 100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "text_gate",
+        "type": "ui_text",
+        "z": "c401f2a6b79db91d",
+        "group": "grp_gate",
+        "order": 1,
+        "width": "4",
+        "height": "4",
+        "name": "Reliability Gate",
+        "format": "{{msg.payload}}",
+        "layout": "col-center",
+        "x": 250,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "g_cpc",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_gate",
+        "order": 2,
+        "width": "4",
+        "height": "3",
+        "gtype": "wave",
+        "title": "CPC Score",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "40",
+        "seg2": "70",
+        "x": 1630,
+        "y": 1160,
+        "wires": []
+    },
+    {
+        "id": "g_phys_risk",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_gate",
+        "order": 3,
+        "width": "4",
+        "height": "3",
+        "gtype": "donut",
+        "title": "Physics Violation Risk",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#00c853",
+            "#ffd600",
+            "#d50000"
+        ],
+        "seg1": "25",
+        "seg2": "55",
+        "x": 1630,
+        "y": 1200,
+        "wires": []
+    },
+    {
+        "id": "text_cycle",
+        "type": "ui_text",
+        "z": "c401f2a6b79db91d",
+        "group": "grp_gate",
+        "order": 4,
+        "width": "12",
+        "height": "1",
+        "name": "Cycle Status",
+        "format": "{{msg.payload}}",
+        "layout": "row-spread",
+        "x": 250,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "fn_health_split",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Component Health Splitter (6 outputs)",
+        "func": "const h = msg.payload.health;\nreturn [\n  {payload: h.fan},\n  {payload: h.hpc},\n  {payload: h.combustor},\n  {payload: h.hpt},\n  {payload: h.lpt},\n  {payload: h.bearing}\n];",
+        "outputs": 6,
+        "x": 1420,
+        "y": 1260,
+        "wires": [
+            [
+                "g_h_fan"
+            ],
+            [
+                "g_h_hpc"
+            ],
+            [
+                "g_h_comb"
+            ],
+            [
+                "g_h_hpt"
+            ],
+            [
+                "g_h_lpt"
+            ],
+            [
+                "g_h_bearing"
+            ]
+        ]
+    },
+    {
+        "id": "g_h_fan",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 1,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "Fan Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "40",
+        "seg2": "70",
+        "x": 1670,
+        "y": 1220,
+        "wires": []
+    },
+    {
+        "id": "g_h_hpc",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 2,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "HPC Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "35",
+        "seg2": "65",
+        "x": 1670,
+        "y": 1260,
+        "wires": []
+    },
+    {
+        "id": "g_h_comb",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 3,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "Combustor Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "40",
+        "seg2": "70",
+        "x": 1670,
+        "y": 1300,
+        "wires": []
+    },
+    {
+        "id": "g_h_hpt",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 4,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "HPT Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "35",
+        "seg2": "65",
+        "x": 1670,
+        "y": 1340,
+        "wires": []
+    },
+    {
+        "id": "g_h_lpt",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 5,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "LPT Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "40",
+        "seg2": "70",
+        "x": 1670,
+        "y": 1380,
+        "wires": []
+    },
+    {
+        "id": "g_h_bearing",
+        "type": "ui_gauge",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_health",
+        "order": 6,
+        "width": "2",
+        "height": "2",
+        "gtype": "donut",
+        "title": "Bearing Health",
+        "label": "%",
+        "format": "{{value}}%",
+        "min": "0",
+        "max": "100",
+        "colors": [
+            "#d50000",
+            "#ffd600",
+            "#00c853"
+        ],
+        "seg1": "25",
+        "seg2": "55",
+        "x": 1670,
+        "y": 1420,
+        "wires": []
+    },
+    {
+        "id": "fn_mqtt_format",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "MQTT Payload Formatter",
+        "func": "const d = msg.payload;\nmsg.payload = JSON.stringify({\n  ts:       new Date().toISOString(),\n  cycle:    d.cycle,\n  rul:      d.predRUL,\n  ci:       [d.ciLow, d.ciHigh],\n  gate:     d.gate,\n  cpc:      d.cpc,\n  physRisk: d.physRisk,\n  health:   d.health\n});\nreturn msg;",
+        "outputs": 1,
+        "x": 710,
+        "y": 1480,
+        "wires": [
+            [
+                "mqtt_out_rul",
+                "mqtt_out_sensors"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_rul",
+        "type": "mqtt out",
+        "z": "c401f2a6b79db91d",
+        "name": "Publish: engine/rul",
+        "topic": "engine/rul",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt_broker_local",
+        "x": 950,
+        "y": 1460,
+        "wires": []
+    },
+    {
+        "id": "mqtt_out_sensors",
+        "type": "mqtt out",
+        "z": "c401f2a6b79db91d",
+        "name": "Publish: engine/sensors/all",
+        "topic": "engine/sensors/all",
+        "qos": "0",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqtt_broker_local",
+        "x": 950,
+        "y": 1500,
+        "wires": []
+    },
+    {
+        "id": "link_out_alerts",
+        "type": "link out",
+        "z": "c401f2a6b79db91d",
+        "name": "Alert Bus",
+        "links": [
+            "link_in_alerts"
+        ],
+        "x": 1810,
+        "y": 1100,
+        "wires": []
+    },
+    {
+        "id": "link_in_alerts",
+        "type": "link in",
+        "z": "c401f2a6b79db91d",
+        "name": "Alert Bus Receiver",
+        "x": 460,
+        "y": 1580,
+        "wires": [
+            [
+                "fn_alert_format"
+            ]
+        ]
+    },
+    {
+        "id": "fn_alert_format",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Alert Feed Formatter",
+        "func": "const a = msg.payload;\nconst icon = (a.level === 'CRITICAL' || a.level === 'REJECT') ? '🔴' : (a.level === 'WARNING' || a.level === 'WARN') ? '⚠️' : 'ℹ️';\nmsg.payload = icon + ' [' + a.time + ']  ' + a.sensor + ': ' + a.value + '  —  ' + a.level;\nreturn msg;",
+        "outputs": 1,
+        "x": 680,
+        "y": 1580,
+        "wires": [
+            [
+                "tmpl_alerts",
+                "debug_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "tmpl_alerts",
+        "type": "ui_template",
+        "z": "c401f2a6b79db91d",
+        "group": "grp_alerts",
+        "name": "Alert Panel",
+        "order": 1,
+        "width": "12",
+        "height": "3",
+        "format": "<div style='font-family:monospace;font-size:13px;padding:10px 14px;line-height:2.0;white-space:pre-wrap;'>{{msg.payload}}</div>",
+        "storeOutMessages": true,
+        "fwdInMessages": true,
+        "resendOnRefresh": false,
+        "templateScope": "local",
+        "x": 900,
+        "y": 1560,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "debug_alerts",
+        "type": "debug",
+        "z": "c401f2a6b79db91d",
+        "name": "Alert Log",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 900,
+        "y": 1600,
+        "wires": []
+    },
+    {
+        "id": "btn_reset",
+        "type": "ui_button",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_ctrl",
+        "order": 1,
+        "width": "3",
+        "height": "1",
+        "passthru": false,
+        "label": "🔄 Reset Engine",
+        "tooltip": "Restart from cycle 0",
+        "color": "white",
+        "bgcolor": "#1565c0",
+        "icon": "",
+        "payload": "reset",
+        "payloadType": "str",
+        "topic": "reset",
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "fn_reset"
+            ]
+        ]
+    },
+    {
+        "id": "btn_force",
+        "type": "ui_button",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_ctrl",
+        "order": 2,
+        "width": "3",
+        "height": "1",
+        "passthru": false,
+        "label": "⚠️ Force Failure",
+        "tooltip": "Jump to near-failure state",
+        "color": "white",
+        "bgcolor": "#b71c1c",
+        "icon": "",
+        "payload": "force",
+        "payloadType": "str",
+        "topic": "force",
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "fn_force"
+            ]
+        ]
+    },
+    {
+        "id": "btn_spike",
+        "type": "ui_button",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "group": "grp_ctrl",
+        "order": 3,
+        "width": "3",
+        "height": "1",
+        "passthru": false,
+        "label": "⚡ Inject Anomaly",
+        "tooltip": "Sudden +18 cycle spike",
+        "color": "white",
+        "bgcolor": "#e65100",
+        "icon": "",
+        "payload": "spike",
+        "payloadType": "str",
+        "topic": "spike",
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "fn_anomaly"
+            ]
+        ]
+    },
+    {
+        "id": "sw_engine",
+        "type": "ui_switch",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "label": "Engine Power",
+        "tooltip": "Toggle simulation",
+        "group": "grp_ctrl",
+        "order": 4,
+        "width": "3",
+        "height": "1",
+        "passthru": true,
+        "decouple": "false",
+        "onicon": "power_settings_new",
+        "oncolor": "#00c853",
+        "officon": "power_off",
+        "offcolor": "#d50000",
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "fn_engine_toggle"
+            ]
+        ]
+    },
+    {
+        "id": "sldr_speed",
+        "type": "ui_slider",
+        "z": "c401f2a6b79db91d",
+        "name": "",
+        "label": "Degradation Speed (1–5)",
+        "tooltip": "",
+        "group": "grp_ctrl",
+        "order": 5,
+        "width": "6",
+        "height": "1",
+        "passthru": true,
+        "outs": "all",
+        "min": 1,
+        "max": 5,
+        "step": 1,
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "fn_set_speed"
+            ]
+        ]
+    },
+    {
+        "id": "fn_reset",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Reset Cycle Counter",
+        "func": "global.set('cycle', 0);\nglobal.set('anomaly', false);\nreturn null;",
+        "outputs": 1,
+        "x": 850,
+        "y": 1660,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fn_force",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Force Near-Failure State",
+        "func": "global.set('cycle', 84);\nreturn null;",
+        "outputs": 1,
+        "x": 850,
+        "y": 1700,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fn_anomaly",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Inject Anomaly Spike",
+        "func": "let c = global.get('cycle') || 0;\nglobal.set('cycle', Math.min(100, c + 18));\nreturn null;",
+        "outputs": 1,
+        "x": 850,
+        "y": 1740,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fn_engine_toggle",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Engine Power Toggle",
+        "func": "const on = msg.payload;\nglobal.set('engine_on', on);\nif (!on) global.set('cycle', 0);\nreturn null;",
+        "outputs": 1,
+        "x": 860,
+        "y": 1780,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fn_set_speed",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Set Degradation Speed",
+        "func": "global.set('deg_speed', msg.payload);\nreturn null;",
+        "outputs": 1,
+        "x": 860,
+        "y": 1820,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "catch_all",
+        "type": "catch",
+        "z": "c401f2a6b79db91d",
+        "name": "Global Error Catcher",
+        "scope": null,
+        "uncaught": false,
+        "x": 460,
+        "y": 1900,
+        "wires": [
+            [
+                "fn_error_handler"
+            ]
+        ]
+    },
+    {
+        "id": "fn_error_handler",
+        "type": "function",
+        "z": "c401f2a6b79db91d",
+        "name": "Error Handler",
+        "func": "const errMsg = (msg.error && msg.error.message) ? msg.error.message : 'Unknown error';\nconst errSrc  = (msg.error && msg.error.source) ? msg.error.source.name : 'Unknown node';\nmsg.payload   = {time: new Date().toLocaleTimeString(), sensor:'SYSTEM ERROR', value: errSrc + ': ' + errMsg, level:'ERROR', color:'#d50000'};\nreturn msg;",
+        "outputs": 1,
+        "x": 700,
+        "y": 1900,
+        "wires": [
+            [
+                "link_out_alerts",
+                "debug_error"
+            ]
+        ]
+    },
+    {
+        "id": "debug_error",
+        "type": "debug",
+        "z": "c401f2a6b79db91d",
+        "name": "Error Debug",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 920,
+        "y": 1900,
+        "wires": []
+    },
+    {
+        "id": "grp_vib",
+        "type": "ui_group",
+        "name": "Vibration Sensors",
+        "tab": "tab_overview",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_thermal",
+        "type": "ui_group",
+        "name": "Thermal Sensors",
+        "tab": "tab_overview",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_pressure",
+        "type": "ui_group",
+        "name": "Pressure Sensors",
+        "tab": "tab_overview",
+        "order": 3,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_flow",
+        "type": "ui_group",
+        "name": "Flow and Fuel",
+        "tab": "tab_overview",
+        "order": 4,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_mechanical",
+        "type": "ui_group",
+        "name": "Mechanical Sensors",
+        "tab": "tab_overview",
+        "order": 5,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_rul",
+        "type": "ui_group",
+        "name": "Predicted RUL Trend",
+        "tab": "tab_rul",
+        "order": 1,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_gate",
+        "type": "ui_group",
+        "name": "Reliability Gate and CPC",
+        "tab": "tab_rul",
+        "order": 3,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_health",
+        "type": "ui_group",
+        "name": "Component Health Index",
+        "tab": "tab_rul",
+        "order": 2,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_alerts",
+        "type": "ui_group",
+        "name": "Active Alerts",
+        "tab": "tab_rul",
+        "order": 4,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "grp_ctrl",
+        "type": "ui_group",
+        "name": "Engine Controls",
+        "tab": "tab_overview",
+        "order": 6,
+        "disp": true,
+        "width": "12",
+        "collapse": false
+    },
+    {
+        "id": "tab_overview",
+        "type": "ui_tab",
+        "name": "Engine Overview",
+        "icon": "flight",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "tab_rul",
+        "type": "ui_tab",
+        "name": "RUL and Health",
+        "icon": "show_chart",
+        "disabled": false,
+        "hidden": false
+    },
+    {
+        "id": "mqtt_broker_local",
+        "type": "mqtt-broker",
+        "name": "Local Mosquitto",
+        "broker": "127.0.0.1",
+        "port": "1883",
+        "clientid": "nodered-dt-publisher",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "closeTopic": "",
+        "willTopic": "",
+        "birthQos": "0",
+        "closeQos": "0",
+        "willQos": "0",
+        "birthPayload": "",
+        "closePayload": "",
+        "willPayload": ""
+    }
+]

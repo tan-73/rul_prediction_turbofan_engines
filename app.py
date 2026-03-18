@@ -8,53 +8,65 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+
 try:
     import plotly.express as px
-except ImportError:  # pragma: no cover - optional visualization dependency.
+    import plotly.graph_objects as go
+except ImportError:
     px = None
+    go = None
 
 from backend.model_service import ModelService
-from inference.attention_model import (
-    RAW_COLUMN_NAMES,
-    maintenance_status,
-)
+from inference.attention_model import RAW_COLUMN_NAMES, maintenance_status
 from inference.reliability import evaluate_reliability_log
 
+# ═══════════════════════════════════════════════════════════════
+# Page Config & Theme
+# ═══════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="PhysGen-RUL — Aero-Engine Prognostics",
+    page_icon="✈️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-st.set_page_config(page_title="Aircraft Engine RUL Predictor", layout="wide")
-st.title("Aircraft Engine RUL Predictor")
-st.write("Upload a CSV file containing C-MAPSS style engine sensor readings.")
+# Inject custom CSS
+CSS_PATH = Path(__file__).parent / "assets" / "theme.css"
+if CSS_PATH.exists():
+    st.markdown(f"<style>{CSS_PATH.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+
+# Constants
 COMPARE_MODE = "Compare (Baseline vs PI)"
-ATTENTION_BACKEND = "attention"
-ARTIFACT_BACKEND = "artifact"
-DECISION_COLORS = {"ACCEPT": "#2ca02c", "WARN": "#ff7f0e", "REJECT": "#d62728", "RAW": "#1f77b4"}
 LIVE_STATE_FILE = Path("logs") / "live_state.json"
 LIVE_PREDICTIONS_FILE = Path("logs") / "mqtt_predictions.csv"
+NODERED_STATE_FILE = Path("logs") / "nodered_live_state.json"
+DECISION_COLORS = {"ACCEPT": "#10b981", "WARN": "#f59e0b", "REJECT": "#ef4444", "RAW": "#3b82f6"}
+
+PLOTLY_TEMPLATE = "plotly_dark"
 
 
-def _show_plotly_hint_once() -> None:
-    if px is None:
-        st.info("Install `plotly` for colorful interactive charts: `pip install plotly`")
+# ═══════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════
+def _decision_badge(decision: str) -> str:
+    cls = {"ACCEPT": "badge-accept", "WARN": "badge-warn", "REJECT": "badge-reject"}.get(decision, "badge-warn")
+    icon = {"ACCEPT": "✅", "WARN": "⚠️", "REJECT": "🔴"}.get(decision, "❓")
+    return f'<span class="{cls}">{icon} {decision}</span>'
 
 
-def _render_decision_distribution(df: pd.DataFrame, column: str = "decision") -> None:
-    counts = df[column].value_counts().rename_axis(column).to_frame("count").reset_index()
-    if counts.empty:
-        return
-    if px is not None:
-        fig = px.pie(
-            counts,
-            names=column,
-            values="count",
-            color=column,
-            color_discrete_map=DECISION_COLORS,
-            hole=0.45,
-            title="Decision Distribution",
-        )
-        fig.update_traces(textposition="inside", textinfo="percent+label")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.bar_chart(counts.set_index(column)["count"])
+def _ri_bar(value: float) -> str:
+    pct = max(0, min(100, value * 100))
+    cls = "ri-fill-high" if value >= 0.75 else "ri-fill-mid" if value >= 0.45 else "ri-fill-low"
+    return f'<div class="ri-bar"><div class="ri-bar-fill {cls}" style="width:{pct}%"></div></div>'
+
+
+def _gate_color(decision: str) -> str:
+    return f'<span class="gate-{decision.lower()}">{decision}</span>'
+
+
+@st.cache_resource
+def get_model_service() -> ModelService:
+    return ModelService()
 
 
 def _read_live_state() -> dict:
@@ -81,557 +93,450 @@ def _read_live_predictions(limit: int = 250) -> pd.DataFrame:
     return df.tail(limit).reset_index(drop=True)
 
 
-@st.cache_resource
-def get_model_service() -> ModelService:
-    return ModelService()
-
-
 def build_reliability_df(result: dict) -> pd.DataFrame:
-    reliability_rows = []
+    rows = []
     for engine_id in result["engine_ids"]:
         rel = result["per_engine_reliability"][engine_id]
-        reliability_rows.append(
-            {
-                "engine_id": engine_id,
-                "ri": rel["ri"],
-                "decision": rel["decision"],
-                "trusted_rul": rel["trusted_rul"],
-                "raw_pred_rul": result["per_engine_mean_rul"][engine_id],
-                "window_std": rel["window_std"],
-                "monotonic_violation_rate": rel["monotonic_violation_rate"],
-                "smoothness_ratio": rel["smoothness_ratio"],
-                "reason_codes": ", ".join(rel["reason_codes"]),
-            }
-        )
-    return pd.DataFrame(reliability_rows)
+        rows.append({
+            "engine_id": engine_id,
+            "ri": rel["ri"],
+            "decision": rel["decision"],
+            "trusted_rul": rel["trusted_rul"],
+            "raw_pred_rul": result["per_engine_mean_rul"][engine_id],
+            "window_std": rel["window_std"],
+            "monotonic_violation_rate": rel["monotonic_violation_rate"],
+            "smoothness_ratio": rel["smoothness_ratio"],
+            "reason_codes": ", ".join(rel["reason_codes"]),
+        })
+    return pd.DataFrame(rows)
 
 
-st.subheader("Live Digital Twin Feed (MQTT)")
-with st.expander("Start MQTT Digital Twin Pipeline", expanded=False):
-    st.code(
-        "python ingestion\\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls",
-        language="powershell",
+def _make_plotly_dark(fig):
+    """Apply consistent dark styling to plotly figures."""
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.8)",
+        font=dict(family="Inter, sans-serif", color="#e2e8f0"),
+        margin=dict(l=40, r=20, t=40, b=30),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
     )
-    st.code(
-        "python ingestion\\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000",
-        language="powershell",
+    fig.update_xaxes(gridcolor="rgba(51,65,85,0.5)", zerolinecolor="rgba(51,65,85,0.5)")
+    fig.update_yaxes(gridcolor="rgba(51,65,85,0.5)", zerolinecolor="rgba(51,65,85,0.5)")
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+# Sidebar
+# ═══════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown('<p class="hero-title">✈️ PhysGen-RUL</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-subtitle">Physics-Integrated Generative Edge-AI<br>IEEE IES GenAI Challenge 2026 · NASA C-MAPSS FD001</p>', unsafe_allow_html=True)
+    st.divider()
+
+    st.markdown("### Monitor")
+    page = st.radio(
+        "Navigation",
+        ["🏠 Fleet Overview", "📡 Live Digital Twin", "📈 RUL Trajectories", "🔬 Batch Inference", "⚙️ Settings"],
+        label_visibility="collapsed",
     )
 
-live_a, live_b, live_c = st.columns([1, 1, 2])
-refresh_now = live_a.button("Refresh Live Feed")
-auto_refresh = live_b.checkbox("Auto-refresh", value=False, key="mqtt_auto_refresh")
-refresh_sec = int(live_c.slider("Refresh interval (sec)", min_value=1, max_value=10, value=2))
+    st.divider()
+    st.markdown("### Inference")
 
-live_state = _read_live_state()
-live_pred_df = _read_live_predictions()
-latest_pred = (live_state.get("latest_prediction") or {}) if live_state else {}
-if not latest_pred and not live_pred_df.empty:
-    latest_pred = live_pred_df.iloc[-1].to_dict()
+    service = get_model_service()
+    backends = service.list_backends()
+    backend_names = [b["name"] for b in backends]
+    backend_descs = {b["name"]: b["description"] for b in backends}
+    selected_backend = st.selectbox(
+        "Runtime Backend",
+        options=backend_names,
+        index=0,
+        format_func=lambda x: f"{x}  —  {backend_descs.get(x, '')}",
+    )
+    model_mode = st.selectbox("Model Mode", ["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
 
-live_metrics = st.columns(6)
-live_metrics[0].metric("Engine", str(live_state.get("engine_id", "-")) if live_state else "-")
-live_metrics[1].metric("Cycles", int(live_state.get("received_cycles_for_engine", 0)) if live_state else 0)
-live_metrics[2].metric("Predicted RUL", f"{float(latest_pred.get('predicted_rul', 0.0)):.2f}")
-live_metrics[3].metric("Trusted RUL", f"{float(latest_pred.get('trusted_rul', 0.0)):.2f}")
-live_metrics[4].metric("RI", f"{float(latest_pred.get('ri', 0.0)):.3f}")
-live_metrics[5].metric("Decision", str(latest_pred.get("decision", "-")))
-
-if live_state:
-    st.caption(f"Last update: {live_state.get('updated_at_utc', '-')}")
-
-if not live_pred_df.empty:
-    if "timestamp_utc" in live_pred_df.columns and px is not None:
-        live_plot_df = live_pred_df.copy()
-        fig_live = px.line(
-            live_plot_df,
-            x="timestamp_utc",
-            y=[c for c in ["predicted_rul", "trusted_rul", "ri"] if c in live_plot_df.columns],
-            title="Live RUL / RI Trajectory",
-        )
-        st.plotly_chart(fig_live, use_container_width=True)
+    st.divider()
+    st.markdown("### Status")
+    live_state = _read_live_state()
+    if live_state:
+        st.markdown('<span class="status-dot live"></span> MQTT Connected', unsafe_allow_html=True)
+        st.caption(f"Unit: {live_state.get('engine_id', '-')} · Cycle: {live_state.get('received_cycles_for_engine', 0)}")
     else:
-        cols = [c for c in ["predicted_rul", "trusted_rul", "ri"] if c in live_pred_df.columns]
-        if cols:
-            st.line_chart(live_pred_df[cols])
-    if "decision" in live_pred_df.columns:
-        _render_decision_distribution(live_pred_df, column="decision")
-    with st.expander("Recent Live Rows", expanded=False):
-        st.dataframe(live_pred_df.tail(40), use_container_width=True)
-else:
-    st.info("No live MQTT predictions yet. Start ingest + digital twin and refresh.")
-
-if auto_refresh and not refresh_now:
-    time.sleep(max(refresh_sec, 1))
-    st.rerun()
+        st.markdown('<span class="status-dot offline"></span> MQTT Offline', unsafe_allow_html=True)
 
 
-uploaded_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"])
-backend_label_map = {
-    "Attention (default)": ATTENTION_BACKEND,
-    "Notebook Artifact (model_artifacts.zip)": ARTIFACT_BACKEND,
-}
-selected_backend_label = st.selectbox("Runtime Backend", options=list(backend_label_map.keys()), index=0)
-model_backend = backend_label_map[selected_backend_label]
-model_mode = st.selectbox("Model Mode", options=["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
-scenario_dir = Path("examples") / "scenarios"
-with st.expander("Demo Scenarios", expanded=False):
-    st.caption("Curated replay scenario files for quick testing.")
-    scenario_map = {
-        "Stable behavior": scenario_dir / "scenario_stable_behavior.csv",
-        "Noisy behavior": scenario_dir / "scenario_noisy_behavior.csv",
-        "Rapid degradation": scenario_dir / "scenario_rapid_degradation.csv",
-    }
-    for label, path in scenario_map.items():
-        if path.exists():
-            st.download_button(
-                f"Download {label}",
-                data=path.read_bytes(),
-                file_name=path.name,
-                mime="text/csv",
-                key=f"dl_{path.name}",
-            )
-        else:
-            st.write(f"{label}: `{path}` not found yet.")
+# ═══════════════════════════════════════════════════════════════
+# Page: Fleet Overview
+# ═══════════════════════════════════════════════════════════════
+if page == "🏠 Fleet Overview":
+    st.markdown('<p class="section-header">Fleet Overview Dashboard</p>', unsafe_allow_html=True)
 
-if uploaded_file is not None:
-    file_bytes = uploaded_file.getvalue()
-    file_signature = (uploaded_file.name, len(file_bytes), model_mode, model_backend)
-    if st.session_state.get("active_file_signature") != file_signature:
-        st.session_state["active_file_signature"] = file_signature
-        st.session_state["active_file_bytes"] = file_bytes
-        st.session_state["active_model_mode"] = model_mode
-        st.session_state["active_model_backend"] = model_backend
-        st.session_state.pop("inference_result", None)
+    uploaded = st.file_uploader("Upload sensor CSV (C-MAPSS format)", type=["csv", "txt"], key="fleet_upload")
+    if uploaded:
+        file_bytes = uploaded.getvalue()
+        sig = (uploaded.name, len(file_bytes), model_mode, selected_backend)
+        if st.session_state.get("fleet_sig") != sig:
+            st.session_state["fleet_sig"] = sig
+            st.session_state["fleet_bytes"] = file_bytes
+            st.session_state.pop("fleet_result", None)
 
-    try:
-        preview_df = pd.read_csv(io.BytesIO(file_bytes), nrows=10)
-    except Exception:
-        try:
-            preview_df = pd.read_csv(io.BytesIO(file_bytes), sep=r"\s+", engine="python", nrows=10)
-        except Exception as exc:
-            st.error(f"Could not parse uploaded file for preview: {exc}")
-            st.stop()
+        if st.button("🚀 Run Fleet Inference", type="primary"):
+            with st.spinner("Running inference across fleet..."):
+                try:
+                    if model_mode == COMPARE_MODE:
+                        st.session_state["fleet_result"] = service.compare(file_bytes, model_backend=selected_backend)
+                        st.session_state["fleet_compare"] = True
+                    else:
+                        st.session_state["fleet_result"] = service.infer(file_bytes, model_mode=model_mode, model_backend=selected_backend)
+                        st.session_state["fleet_compare"] = False
+                except Exception as exc:
+                    st.error(f"Inference failed: {exc}")
 
-    st.subheader("Uploaded Data Preview")
-    st.dataframe(preview_df)
-
-    if st.button("Run RUL Inference"):
-        with st.spinner("Running model inference..."):
-            try:
-                service = get_model_service()
-                payload = st.session_state["active_file_bytes"]
-                if model_mode == COMPARE_MODE:
-                    if model_backend != ATTENTION_BACKEND:
-                        raise ValueError("Compare mode currently supports Attention backend only.")
-                    st.session_state["compare_result"] = service.compare(payload, model_backend=model_backend)
-                    st.session_state.pop("inference_result", None)
-                else:
-                    result = service.infer(payload, model_mode=model_mode, model_backend=model_backend)
-                    st.session_state["inference_result"] = result
-                    st.session_state.pop("compare_result", None)
-            except FileNotFoundError as exc:
-                st.error(str(exc))
-                st.stop()
-            except ValueError as exc:
-                st.error(f"Input format error: {exc}")
-                st.info(
-                    "Expected data must include either named C-MAPSS columns "
-                    "(unit_nr, time_cycles, op_setting_1..3, s_1..s_21) or at least 26 raw columns."
-                )
-                st.stop()
-            except Exception as exc:
-                st.error(f"Unexpected error during inference: {exc}")
-                st.stop()
-
-    if st.session_state.get("active_model_mode") == COMPARE_MODE and "compare_result" in st.session_state:
-        compare_result = st.session_state["compare_result"]
-        baseline_result = compare_result["baseline"]
-        pi_result = compare_result["physics_informed"]
-        engine_ids = sorted(set(baseline_result["engine_ids"]) & set(pi_result["engine_ids"]))
-
-        rows = []
-        for engine_id in engine_ids:
-            b_rel = baseline_result["per_engine_reliability"][engine_id]
-            p_rel = pi_result["per_engine_reliability"][engine_id]
-            b_pred = float(baseline_result["per_engine_mean_rul"][engine_id])
-            p_pred = float(pi_result["per_engine_mean_rul"][engine_id])
-            b_ri = float(b_rel["ri"])
-            p_ri = float(p_rel["ri"])
-            rows.append(
-                {
-                    "engine_id": int(engine_id),
-                    "baseline_pred_rul": b_pred,
-                    "pi_pred_rul": p_pred,
-                    "pred_rul_delta_pi_minus_baseline": p_pred - b_pred,
-                    "baseline_ri": b_ri,
-                    "pi_ri": p_ri,
-                    "ri_delta_pi_minus_baseline": p_ri - b_ri,
-                    "baseline_decision": b_rel["decision"],
-                    "pi_decision": p_rel["decision"],
-                    "decision_delta": "CHANGED" if b_rel["decision"] != p_rel["decision"] else "SAME",
-                }
-            )
-        compare_df = pd.DataFrame(rows)
-
-        baseline_overall = float(baseline_result["overall_mean_rul"])
-        pi_overall = float(pi_result["overall_mean_rul"])
-        baseline_ri = float(baseline_result["overall_reliability_index"])
-        pi_ri = float(pi_result["overall_reliability_index"])
-        decision_change_rate = (
-            float((compare_df["decision_delta"] == "CHANGED").mean()) if not compare_df.empty else 0.0
-        )
-
-        st.subheader("Side-by-Side Baseline vs PI")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Baseline Overall RUL", f"{baseline_overall:.2f}")
-        c2.metric("PI Overall RUL", f"{pi_overall:.2f}", delta=f"{pi_overall - baseline_overall:.2f}")
-        c3.metric("Baseline Overall RI", f"{baseline_ri:.2f}")
-        c4.metric("PI Overall RI", f"{pi_ri:.2f}", delta=f"{pi_ri - baseline_ri:.2f}")
-        st.caption(f"Decision change rate across engines: {decision_change_rate:.2%}")
-
-        if not compare_df.empty:
-            st.dataframe(compare_df, use_container_width=True)
-            st.download_button(
-                "Download Baseline vs PI Comparison (CSV)",
-                data=compare_df.to_csv(index=False).encode("utf-8"),
-                file_name="baseline_vs_pi_comparison.csv",
-                mime="text/csv",
-            )
-            if px is not None:
-                fig_compare = px.bar(
-                    compare_df.melt(
-                        id_vars=["engine_id"],
-                        value_vars=["baseline_pred_rul", "pi_pred_rul"],
-                        var_name="mode",
-                        value_name="predicted_rul",
-                    ),
-                    x="engine_id",
-                    y="predicted_rul",
-                    color="mode",
-                    barmode="group",
-                    title="Baseline vs PI Predicted RUL",
-                    color_discrete_sequence=["#4c78a8", "#f58518"],
-                )
-                st.plotly_chart(fig_compare, use_container_width=True)
-                fig_delta = px.scatter(
-                    compare_df,
-                    x="ri_delta_pi_minus_baseline",
-                    y="pred_rul_delta_pi_minus_baseline",
-                    color="decision_delta",
-                    title="PI-Baseline Delta Map",
-                    color_discrete_map={"SAME": "#1f77b4", "CHANGED": "#d62728"},
-                )
-                st.plotly_chart(fig_delta, use_container_width=True)
-            else:
-                _show_plotly_hint_once()
-                st.bar_chart(compare_df.set_index("engine_id")[["baseline_pred_rul", "pi_pred_rul"]])
-                st.bar_chart(compare_df.set_index("engine_id")[["pred_rul_delta_pi_minus_baseline"]])
-            _render_decision_distribution(compare_df.rename(columns={"decision_delta": "decision"}), column="decision")
-
-        compare_tab_baseline, compare_tab_pi = st.tabs(["Baseline Details", "PI Details"])
-        with compare_tab_baseline:
-            baseline_reliability_df = build_reliability_df(baseline_result)
-            st.dataframe(baseline_reliability_df, use_container_width=True)
-        with compare_tab_pi:
-            pi_reliability_df = build_reliability_df(pi_result)
-            st.dataframe(pi_reliability_df, use_container_width=True)
-
-    if "inference_result" in st.session_state:
-        result = st.session_state["inference_result"]
-        active_mode = st.session_state.get("active_model_mode", model_mode)
-        active_backend = st.session_state.get("active_model_backend", model_backend)
+    if "fleet_result" in st.session_state and not st.session_state.get("fleet_compare", False):
+        result = st.session_state["fleet_result"]
         predictions = result["per_engine_mean_rul"]
         overall_rul = float(result["overall_mean_rul"])
         overall_ri = float(result["overall_reliability_index"])
-        raw_df = result["raw_df"]
+        engine_ids = result["engine_ids"]
 
-        st.subheader("Predicted Remaining Useful Life (RUL)")
-        metric_col_1, metric_col_2, metric_col_3, metric_col_4 = st.columns(4)
-        metric_col_1.metric("Overall Predicted RUL", f"{overall_rul:.2f}")
-        metric_col_2.metric("Fleet Engines", len(predictions))
-        metric_col_3.metric("Status", maintenance_status(overall_rul))
-        metric_col_4.metric("Reliability Index (RI)", f"{overall_ri:.2f}")
-        st.caption(
-            f"Active model mode: {st.session_state.get('active_model_mode', model_mode)} | "
-            f"backend: {active_backend}"
-        )
+        # Top metric row
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Fleet Engines", len(predictions), help="Total engines in uploaded data")
+        m2.metric("Mean RUL", f"{overall_rul:.1f}", help="Fleet average remaining useful life (cycles)")
+        m3.metric("Reliability Index", f"{overall_ri:.2f}", help="Fleet mean RI (0-1)")
 
-        normalized = max(0.0, min(1.0, overall_rul / 125.0))
-        st.progress(normalized, text="RUL score normalized to 0-125")
+        # Count decisions
+        rel_df = build_reliability_df(result)
+        decision_counts = rel_df["decision"].value_counts().to_dict()
+        m4.metric("Accept Gate", f"{decision_counts.get('ACCEPT', 0)}", help=f"RI ≥ 0.75")
+        m5.metric("Warn / Reject", f"{decision_counts.get('WARN', 0)} / {decision_counts.get('REJECT', 0)}")
 
-        overview_tab, reliability_tab, insights_tab = st.tabs(
-            ["Prediction Overview", "Reliability Gating", "Advanced Insights"]
-        )
+        st.divider()
 
-        with overview_tab:
-            result_df = pd.DataFrame(
-                [{"engine_id": int(engine_id), "predicted_rul": float(rul)} for engine_id, rul in predictions.items()]
-            )
-            st.subheader("Per Engine Prediction")
-            st.dataframe(result_df, use_container_width=True)
-            if len(result_df) > 1:
-                if px is not None:
-                    fig = px.bar(
-                        result_df.sort_values("predicted_rul", ascending=False),
-                        x="engine_id",
-                        y="predicted_rul",
-                        color="predicted_rul",
-                        color_continuous_scale="Turbo",
-                        title="Per Engine RUL (Color Encoded)",
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    box_fig = px.box(result_df, y="predicted_rul", points="all", title="Fleet RUL Spread")
-                    st.plotly_chart(box_fig, use_container_width=True)
-                else:
-                    _show_plotly_hint_once()
-                    st.bar_chart(result_df.set_index("engine_id")["predicted_rul"])
+        # Fleet engine table
+        col_table, col_chart = st.columns([1, 1])
+        with col_table:
+            st.markdown('<p class="section-header">Fleet Engine Table</p>', unsafe_allow_html=True)
+            table_data = []
+            for eid in engine_ids:
+                rel = result["per_engine_reliability"][eid]
+                rul = float(predictions[eid])
+                cpc_val = rel.get("cpc", rel.get("physics_score", "-"))
+                table_data.append({
+                    "Unit": f"U-{eid:03d}",
+                    "Cycles": int(result["num_test_windows_list"][engine_ids.index(eid)]),
+                    "Mean RUL": f"{rul:.0f}",
+                    "RI": f"{float(rel['ri']):.2f}",
+                    "CPC": f"{float(cpc_val):.2f}" if isinstance(cpc_val, (int, float)) else str(cpc_val),
+                    "Gate": rel["decision"],
+                    "Mode": model_mode.split("(")[0].strip(),
+                })
+            fleet_df = pd.DataFrame(table_data)
+            st.dataframe(fleet_df, use_container_width=True, height=min(400, 40 + len(fleet_df) * 35))
 
-        with reliability_tab:
-            reliability_df = build_reliability_df(result)
-            export_df = reliability_df[["engine_id", "raw_pred_rul", "ri", "decision", "trusted_rul"]].rename(
-                columns={"raw_pred_rul": "predicted_rul"}
-            )
-            st.subheader("Reliability-Aware Gating Summary")
-            st.dataframe(reliability_df, use_container_width=True)
-            st.download_button(
-                "Download Prediction Reliability Log (CSV)",
-                data=export_df.to_csv(index=False).encode("utf-8"),
-                file_name="prediction_reliability_log.csv",
-                mime="text/csv",
-            )
-
-            _render_decision_distribution(reliability_df, column="decision")
+        with col_chart:
+            st.markdown('<p class="section-header">RUL Distribution</p>', unsafe_allow_html=True)
             if px is not None:
-                scatter = px.scatter(
-                    reliability_df,
-                    x="ri",
-                    y="raw_pred_rul",
-                    color="decision",
-                    size="window_std",
-                    hover_data=["engine_id", "trusted_rul"],
-                    color_discrete_map=DECISION_COLORS,
-                    title="Reliability vs Raw Prediction",
-                )
+                bar_df = pd.DataFrame({"engine_id": [f"U-{e:03d}" for e in engine_ids], "rul": [float(predictions[e]) for e in engine_ids], "decision": [result["per_engine_reliability"][e]["decision"] for e in engine_ids]})
+                fig = px.bar(bar_df, x="engine_id", y="rul", color="decision", color_discrete_map=DECISION_COLORS, title="Per-Engine RUL with Gate Decision")
+                _make_plotly_dark(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Reliability gating section
+        st.divider()
+        st.markdown('<p class="section-header">Reliability Gating</p>', unsafe_allow_html=True)
+        g1, g2 = st.columns([1, 1])
+        with g1:
+            if px is not None:
+                counts = rel_df["decision"].value_counts().reset_index()
+                counts.columns = ["decision", "count"]
+                pie = px.pie(counts, names="decision", values="count", color="decision", color_discrete_map=DECISION_COLORS, hole=0.5, title="Fleet Gate Distribution")
+                _make_plotly_dark(pie)
+                pie.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(pie, use_container_width=True)
+
+        with g2:
+            if px is not None:
+                scatter = px.scatter(rel_df, x="ri", y="raw_pred_rul", color="decision", size="window_std", hover_data=["engine_id", "trusted_rul"], color_discrete_map=DECISION_COLORS, title="Reliability vs Prediction")
+                _make_plotly_dark(scatter)
                 st.plotly_chart(scatter, use_container_width=True)
 
-            st.subheader("Reliability Evaluation (Optional Ground Truth)")
-            gt_file = st.file_uploader(
-                "Upload ground truth CSV with columns: engine_id,true_rul",
-                type=["csv"],
-                key="gt_eval_file",
-            )
-            if gt_file is not None:
+        # Detailed per-engine analysis
+        st.divider()
+        st.markdown('<p class="section-header">Per-Engine Deep Dive</p>', unsafe_allow_html=True)
+        sel_engine = st.selectbox("Select Engine", engine_ids, format_func=lambda x: f"U-{x:03d}")
+        if sel_engine is not None:
+            sel_rel = result["per_engine_reliability"][sel_engine]
+            sel_windows = result["per_engine_window_rul"][sel_engine]
+            sel_attention = result["per_engine_last_attention"][sel_engine]
+
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Predicted RUL", f"{float(predictions[sel_engine]):.1f}")
+            d2.metric("Reliability Index", f"{float(sel_rel['ri']):.2f}")
+            d3.markdown(f"**Gate Decision**<br>{_decision_badge(sel_rel['decision'])}", unsafe_allow_html=True)
+
+            if px is not None:
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    win_df = pd.DataFrame({"window": range(1, len(sel_windows)+1), "rul": sel_windows})
+                    fig_w = px.area(win_df, x="window", y="rul", title=f"U-{sel_engine:03d} Window-Level RUL", color_discrete_sequence=["#06b6d4"])
+                    _make_plotly_dark(fig_w)
+                    st.plotly_chart(fig_w, use_container_width=True)
+                with dc2:
+                    att_df = pd.DataFrame({"timestep": range(1, len(sel_attention)+1), "weight": sel_attention})
+                    fig_a = px.bar(att_df, x="timestep", y="weight", color="weight", color_continuous_scale="Sunset", title=f"U-{sel_engine:03d} Attention Weights")
+                    _make_plotly_dark(fig_a)
+                    st.plotly_chart(fig_a, use_container_width=True)
+
+            # Sensor trends
+            raw_df = result["raw_df"]
+            if isinstance(raw_df, list):
+                raw_df = pd.DataFrame(raw_df)
+            engine_df = raw_df[raw_df["unit_nr"] == sel_engine].sort_values("time_cycles")
+            sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
+
+            st.markdown('<p class="section-header">Live Sensor Telemetry</p>', unsafe_allow_html=True)
+            sel_sensors = st.multiselect("Sensors", sensor_cols, default=["s_2", "s_3", "s_4", "s_7", "s_11", "s_15"])
+            if sel_sensors and px is not None:
+                trend = engine_df[["time_cycles"] + sel_sensors].melt(id_vars="time_cycles", var_name="sensor", value_name="reading")
+                fig_t = px.line(trend, x="time_cycles", y="reading", color="sensor", title=f"U-{sel_engine:03d} Sensor Telemetry")
+                _make_plotly_dark(fig_t)
+                st.plotly_chart(fig_t, use_container_width=True)
+
+        # Download
+        st.download_button("📥 Download Fleet Report (CSV)", data=rel_df.to_csv(index=False).encode(), file_name="fleet_report.csv", mime="text/csv")
+
+    # Compare mode
+    if "fleet_result" in st.session_state and st.session_state.get("fleet_compare", False):
+        compare = st.session_state["fleet_result"]
+        bl = compare["baseline"]
+        pi = compare["physics_informed"]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Baseline RUL", f"{float(bl['overall_mean_rul']):.1f}")
+        m2.metric("PI RUL", f"{float(pi['overall_mean_rul']):.1f}", delta=f"{float(pi['overall_mean_rul'])-float(bl['overall_mean_rul']):.1f}")
+        m3.metric("Baseline RI", f"{float(bl['overall_reliability_index']):.2f}")
+        m4.metric("PI RI", f"{float(pi['overall_reliability_index']):.2f}", delta=f"{float(pi['overall_reliability_index'])-float(bl['overall_reliability_index']):.2f}")
+
+        deltas = pd.DataFrame(compare["engine_deltas"])
+        if not deltas.empty and px is not None:
+            fig_cmp = px.bar(deltas.melt(id_vars=["engine_id"], value_vars=["baseline_pred_rul", "pi_pred_rul"], var_name="mode", value_name="rul"), x="engine_id", y="rul", color="mode", barmode="group", title="Baseline vs PI per Engine", color_discrete_sequence=["#3b82f6", "#f59e0b"])
+            _make_plotly_dark(fig_cmp)
+            st.plotly_chart(fig_cmp, use_container_width=True)
+            st.dataframe(deltas, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Page: Live Digital Twin
+# ═══════════════════════════════════════════════════════════════
+elif page == "📡 Live Digital Twin":
+    st.markdown('<p class="section-header">Live Digital Twin Feed (MQTT)</p>', unsafe_allow_html=True)
+
+    lcol1, lcol2, lcol3 = st.columns([1, 1, 2])
+    refresh_now = lcol1.button("🔄 Refresh")
+    auto_refresh = lcol2.checkbox("Auto-refresh", value=False, key="mqtt_auto")
+    refresh_sec = int(lcol3.slider("Interval (sec)", 1, 10, 2))
+
+    live_state = _read_live_state()
+    live_df = _read_live_predictions()
+    latest = (live_state.get("latest_prediction") or {}) if live_state else {}
+    if not latest and not live_df.empty:
+        latest = live_df.iloc[-1].to_dict()
+
+    lm = st.columns(6)
+    lm[0].metric("Engine", str(live_state.get("engine_id", "-")) if live_state else "-")
+    lm[1].metric("Cycles", int(live_state.get("received_cycles_for_engine", 0)) if live_state else 0)
+    lm[2].metric("Predicted RUL", f"{float(latest.get('predicted_rul', 0)):.1f}")
+    lm[3].metric("Trusted RUL", f"{float(latest.get('trusted_rul', 0)):.1f}")
+    lm[4].metric("RI", f"{float(latest.get('ri', 0)):.3f}")
+    lm[5].metric("Decision", str(latest.get("decision", "-")))
+
+    if live_state:
+        st.caption(f"Last update: {live_state.get('updated_at_utc', '-')}")
+
+    if not live_df.empty:
+        if px is not None:
+            cols_plot = [c for c in ["predicted_rul", "trusted_rul"] if c in live_df.columns]
+            x_col = "timestamp_utc" if "timestamp_utc" in live_df.columns else live_df.index.name or "index"
+            if x_col == "index":
+                live_df = live_df.reset_index()
+            fig_live = px.line(live_df, x=x_col, y=cols_plot, title="Live RUL / Trusted RUL Trajectory", color_discrete_sequence=["#06b6d4", "#8b5cf6"])
+            _make_plotly_dark(fig_live)
+            st.plotly_chart(fig_live, use_container_width=True)
+
+            if "ri" in live_df.columns:
+                fig_ri = px.line(live_df, x=x_col, y="ri", title="Reliability Index over Time", color_discrete_sequence=["#10b981"])
+                _make_plotly_dark(fig_ri)
+                st.plotly_chart(fig_ri, use_container_width=True)
+
+        if "decision" in live_df.columns:
+            counts = live_df["decision"].value_counts().reset_index()
+            counts.columns = ["decision", "count"]
+            if px is not None:
+                fig_dec = px.pie(counts, names="decision", values="count", color="decision", color_discrete_map=DECISION_COLORS, hole=0.45, title="Decision Distribution")
+                _make_plotly_dark(fig_dec)
+                st.plotly_chart(fig_dec, use_container_width=True)
+
+        with st.expander("📋 Recent Live Rows"):
+            st.dataframe(live_df.tail(40), use_container_width=True)
+    else:
+        st.info("No live MQTT predictions yet. Start ingest + digital twin streamer and refresh.")
+
+    with st.expander("📖 Start MQTT Pipeline"):
+        st.code("python ingestion\\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls", language="powershell")
+        st.code("python ingestion\\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000", language="powershell")
+
+    if auto_refresh and not refresh_now:
+        time.sleep(max(refresh_sec, 1))
+        st.rerun()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Page: RUL Trajectories (Streaming Replay)
+# ═══════════════════════════════════════════════════════════════
+elif page == "📈 RUL Trajectories":
+    st.markdown('<p class="section-header">Streaming Replay — Cycle-by-Cycle RUL</p>', unsafe_allow_html=True)
+
+    replay_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"], key="replay_upload")
+    if replay_file:
+        replay_bytes = replay_file.getvalue()
+        # Quick peek to get engine list
+        try:
+            peek = service.infer(replay_bytes, model_mode="Baseline", model_backend="attention")
+            engines = peek["engine_ids"]
+        except Exception:
+            engines = [1]
+
+        rc1, rc2 = st.columns(2)
+        replay_engine = rc1.selectbox("Engine", engines, format_func=lambda x: f"U-{x:03d}")
+        replay_step = rc2.slider("Step size", 1, 5, 1)
+
+        if st.button("▶️ Run Replay", type="primary"):
+            with st.spinner("Simulating real-time RUL updates..."):
                 try:
-                    gt_df = pd.read_csv(gt_file)
-                    required_gt = {"engine_id", "true_rul"}
-                    if not required_gt.issubset(set(gt_df.columns)):
-                        st.error("Ground truth CSV must contain columns: engine_id,true_rul")
-                    else:
-                        eval_df = export_df.merge(gt_df[["engine_id", "true_rul"]], on="engine_id", how="inner")
-                        if eval_df.empty:
-                            st.warning("No overlapping engine_id values between predictions and ground truth.")
-                        else:
-                            eval_df["abs_error"] = (eval_df["predicted_rul"] - eval_df["true_rul"]).abs()
-                            eval_metrics = evaluate_reliability_log(eval_df, catastrophic_error_threshold=20.0)
-                            e1, e2, e3, e4 = st.columns(4)
-                            e1.metric("Mean Absolute Error", f"{eval_metrics['mean_abs_error']:.2f}")
-                            e2.metric("RI-Error Correlation", f"{eval_metrics['ri_error_correlation']:.3f}")
-                            e3.metric("Catastrophic Error Rate", f"{eval_metrics['catastrophic_rate']:.2%}")
-                            e4.metric("Accept Rate", f"{eval_metrics.get('accept_rate', 0.0):.2%}")
-
-                            if px is not None:
-                                eval_plot = px.scatter(
-                                    eval_df,
-                                    x="ri",
-                                    y="abs_error",
-                                    color="decision" if "decision" in eval_df.columns else None,
-                                    color_discrete_map=DECISION_COLORS,
-                                    title="RI vs Absolute Error",
-                                )
-                                st.plotly_chart(eval_plot, use_container_width=True)
-                            else:
-                                st.scatter_chart(eval_df.set_index("ri")[["abs_error"]])
-                            st.dataframe(eval_df, use_container_width=True)
-                except Exception as exc:
-                    st.error(f"Could not evaluate reliability metrics: {exc}")
-
-            st.subheader("Streaming Replay (Cycle-by-Cycle)")
-            stream_engine = st.selectbox(
-                "Engine for streaming replay",
-                options=result["engine_ids"],
-                index=0,
-                key="stream_engine",
-            )
-            stream_step = st.slider("Replay step (cycles)", min_value=1, max_value=5, value=1)
-            if st.button("Run Streaming Replay"):
-                with st.spinner("Simulating real-time RUL updates..."):
-                    replay = get_model_service().replay(
-                        st.session_state["active_file_bytes"],
-                        model_mode=active_mode,
-                        engine_id=int(stream_engine),
-                        step=int(stream_step),
-                        model_backend=active_backend,
-                    )
+                    replay = service.replay(replay_bytes, model_mode=model_mode, engine_id=int(replay_engine), step=replay_step, model_backend=selected_backend)
                     stream_df = pd.DataFrame(replay["rows"])
-                st.dataframe(stream_df, use_container_width=True)
-                if px is not None:
-                    stream_long = stream_df.melt(
-                        id_vars=["time_cycles"],
-                        value_vars=["predicted_rul", "trusted_rul"],
-                        var_name="series",
-                        value_name="rul",
-                    )
-                    stream_fig = px.line(
-                        stream_long,
-                        x="time_cycles",
-                        y="rul",
-                        color="series",
-                        title="Streaming Replay: Raw vs Trusted RUL",
-                        color_discrete_sequence=["#17becf", "#bc5090"],
-                    )
-                    st.plotly_chart(stream_fig, use_container_width=True)
-                    ri_fig = px.line(
-                        stream_df,
-                        x="time_cycles",
-                        y="reliability_index",
-                        color="decision",
-                        title="Streaming Replay: Reliability Trajectory",
-                        color_discrete_map=DECISION_COLORS,
-                    )
-                    st.plotly_chart(ri_fig, use_container_width=True)
-                else:
-                    st.line_chart(stream_df.set_index("time_cycles")[["predicted_rul", "trusted_rul"]])
-                    st.line_chart(stream_df.set_index("time_cycles")[["reliability_index"]])
+                    st.session_state["replay_df"] = stream_df
+                except Exception as exc:
+                    st.error(f"Replay failed: {exc}")
 
-        with insights_tab:
-            with st.expander("Advanced Insights", expanded=True):
-                dq_col_1, dq_col_2, dq_col_3, dq_col_4 = st.columns(4)
-                dq_col_1.metric("Rows", len(raw_df))
-                dq_col_2.metric("Missing Values", int(raw_df.isna().sum().sum()))
-                dq_col_3.metric("Duplicate Rows", int(raw_df.duplicated().sum()))
-                dq_col_4.metric("Unique Engines", int(raw_df["unit_nr"].nunique()))
+        if "replay_df" in st.session_state:
+            stream_df = st.session_state["replay_df"]
+            if px is not None:
+                long = stream_df.melt(id_vars=["time_cycles"], value_vars=["predicted_rul", "trusted_rul"], var_name="series", value_name="rul")
+                fig_s = px.line(long, x="time_cycles", y="rul", color="series", title="Streaming Replay: Raw vs Trusted RUL", color_discrete_sequence=["#06b6d4", "#8b5cf6"])
+                _make_plotly_dark(fig_s)
+                st.plotly_chart(fig_s, use_container_width=True)
 
-                cycle_check = (
-                    raw_df.groupby("unit_nr")["time_cycles"]
-                    .agg(["min", "max", "count"])
-                    .rename(columns={"count": "observed_rows"})
-                )
-                cycle_check["expected_rows"] = cycle_check["max"] - cycle_check["min"] + 1
-                cycle_check["missing_cycle_rows"] = cycle_check["expected_rows"] - cycle_check["observed_rows"]
-                st.subheader("Cycle Continuity Check")
-                st.dataframe(cycle_check, use_container_width=True)
+                if "reliability_index" in stream_df.columns:
+                    fig_ri = px.line(stream_df, x="time_cycles", y="reliability_index", color="decision" if "decision" in stream_df.columns else None, title="Reliability Trajectory", color_discrete_map=DECISION_COLORS)
+                    _make_plotly_dark(fig_ri)
+                    st.plotly_chart(fig_ri, use_container_width=True)
 
-                selected_engine = st.selectbox(
-                    "Select engine for detailed visualizations",
-                    options=result["engine_ids"],
-                    index=0,
-                )
+            st.dataframe(stream_df, use_container_width=True)
+            st.download_button("📥 Download Replay", data=stream_df.to_csv(index=False).encode(), file_name="replay_trajectory.csv", mime="text/csv")
 
-                selected_window_preds = result["per_engine_window_rul"][selected_engine]
-                selected_rel = result["per_engine_reliability"][selected_engine]
-                window_df = pd.DataFrame(
-                    {
-                        "window_index": np.arange(1, len(selected_window_preds) + 1),
-                        "predicted_rul": selected_window_preds,
-                    }
-                )
+    # Demo scenarios
+    with st.expander("🎯 Demo Scenarios"):
+        scenario_dir = Path("examples") / "scenarios"
+        for label, fname in [("Stable", "scenario_stable_behavior.csv"), ("Noisy", "scenario_noisy_behavior.csv"), ("Rapid Degradation", "scenario_rapid_degradation.csv")]:
+            p = scenario_dir / fname
+            if p.exists():
+                st.download_button(f"📥 {label}", data=p.read_bytes(), file_name=fname, mime="text/csv", key=f"dl_{fname}")
 
-                st.subheader(f"Engine {selected_engine}: Window-Level RUL")
-                if px is not None:
-                    window_fig = px.area(
-                        window_df,
-                        x="window_index",
-                        y="predicted_rul",
-                        title=f"Engine {selected_engine}: Window-Level RUL",
-                        color_discrete_sequence=["#00a896"],
-                    )
-                    st.plotly_chart(window_fig, use_container_width=True)
-                else:
-                    st.line_chart(window_df.set_index("window_index")["predicted_rul"])
-                st.caption(
-                    f"Uncertainty summary - mean: {np.mean(selected_window_preds):.2f}, "
-                    f"min: {np.min(selected_window_preds):.2f}, max: {np.max(selected_window_preds):.2f}, "
-                    f"std: {np.std(selected_window_preds):.2f}"
-                )
-                st.caption(
-                    f"Reliability decision: {selected_rel['decision']} | "
-                    f"RI={selected_rel['ri']:.2f} | "
-                    f"Reasons={', '.join(selected_rel['reason_codes'])}"
-                )
 
-                attention = result["per_engine_last_attention"][selected_engine]
-                attention_df = pd.DataFrame(
-                    {"time_step": np.arange(1, len(attention) + 1), "attention_weight": attention}
-                )
-                st.subheader(f"Engine {selected_engine}: Attention Across Last {len(attention)} Timesteps")
-                if px is not None:
-                    attention_fig = px.bar(
-                        attention_df,
-                        x="time_step",
-                        y="attention_weight",
-                        color="attention_weight",
-                        color_continuous_scale="Sunset",
-                        title=f"Engine {selected_engine}: Attention Weights",
-                    )
-                    st.plotly_chart(attention_fig, use_container_width=True)
-                else:
-                    st.area_chart(attention_df.set_index("time_step")["attention_weight"])
+# ═══════════════════════════════════════════════════════════════
+# Page: Batch Inference (detailed)
+# ═══════════════════════════════════════════════════════════════
+elif page == "🔬 Batch Inference":
+    st.markdown('<p class="section-header">Batch Inference & Analytics</p>', unsafe_allow_html=True)
 
-                engine_df = raw_df[raw_df["unit_nr"] == selected_engine].sort_values("time_cycles")
-                sensor_columns = [col for col in RAW_COLUMN_NAMES if col.startswith("s_")]
+    batch_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"], key="batch_upload")
+    if batch_file:
+        batch_bytes = batch_file.getvalue()
+        preview = pd.read_csv(io.BytesIO(batch_bytes), nrows=10)
+        st.dataframe(preview, use_container_width=True)
 
-                st.subheader(f"Engine {selected_engine}: Sensor Trends")
-                selected_sensors = st.multiselect(
-                    "Sensors to visualize",
-                    options=sensor_columns,
-                    default=["s_2", "s_3", "s_4", "s_7"],
-                )
-                if selected_sensors:
-                    trend_df = engine_df[["time_cycles"] + selected_sensors].set_index("time_cycles")
-                    if px is not None:
-                        trend_long = trend_df.reset_index().melt(
-                            id_vars=["time_cycles"], var_name="sensor", value_name="reading"
-                        )
-                        trend_fig = px.line(
-                            trend_long,
-                            x="time_cycles",
-                            y="reading",
-                            color="sensor",
-                            title=f"Engine {selected_engine}: Sensor Trends",
-                        )
-                        st.plotly_chart(trend_fig, use_container_width=True)
-                    else:
-                        st.line_chart(trend_df)
-
-                st.subheader("Sensor Correlation Matrix (EDA)")
-                corr_cols = [col for col in sensor_columns if col in engine_df.columns][:12]
-                corr = engine_df[corr_cols].corr()
+        if st.button("🚀 Run Inference", type="primary"):
+            with st.spinner("Processing..."):
                 try:
-                    import matplotlib  # noqa: F401
+                    result = service.infer(batch_bytes, model_mode=model_mode, model_backend=selected_backend)
+                    st.session_state["batch_result"] = result
+                except Exception as exc:
+                    st.error(f"Error: {exc}")
 
-                    st.dataframe(corr.style.background_gradient(cmap="coolwarm"), use_container_width=True)
-                except ImportError:
-                    st.info("Install `matplotlib` to enable colored correlation styling.")
-                    st.dataframe(corr.round(3), use_container_width=True)
+    if "batch_result" in st.session_state:
+        result = st.session_state["batch_result"]
+        rel_df = build_reliability_df(result)
 
-                st.subheader("Sensor Distribution Snapshot (EDA)")
-                hist_sensor = st.selectbox("Sensor for distribution", options=sensor_columns, index=1)
-                hist_counts, hist_edges = np.histogram(engine_df[hist_sensor].values, bins=12)
-                hist_df = pd.DataFrame(
-                    {
-                        "bin_center": (hist_edges[:-1] + hist_edges[1:]) / 2,
-                        "count": hist_counts,
-                    }
-                )
-                if px is not None:
-                    hist_fig = px.bar(
-                        hist_df,
-                        x="bin_center",
-                        y="count",
-                        color="count",
-                        color_continuous_scale="Tealrose",
-                        title=f"{hist_sensor} Distribution",
-                    )
-                    st.plotly_chart(hist_fig, use_container_width=True)
-                else:
-                    st.bar_chart(hist_df.set_index("bin_center")["count"])
+        st.markdown('<p class="section-header">Reliability Gating Table</p>', unsafe_allow_html=True)
+        st.dataframe(rel_df, use_container_width=True)
+
+        # Ground truth evaluation
+        st.markdown('<p class="section-header">Ground Truth Evaluation (Optional)</p>', unsafe_allow_html=True)
+        gt_file = st.file_uploader("Upload ground truth CSV (engine_id, true_rul)", type=["csv"], key="gt_eval")
+        if gt_file:
+            try:
+                gt_df = pd.read_csv(gt_file)
+                if {"engine_id", "true_rul"}.issubset(set(gt_df.columns)):
+                    export_df = rel_df[["engine_id", "raw_pred_rul", "ri", "decision", "trusted_rul"]].rename(columns={"raw_pred_rul": "predicted_rul"})
+                    eval_df = export_df.merge(gt_df[["engine_id", "true_rul"]], on="engine_id", how="inner")
+                    if not eval_df.empty:
+                        eval_df["abs_error"] = (eval_df["predicted_rul"] - eval_df["true_rul"]).abs()
+                        metrics = evaluate_reliability_log(eval_df, catastrophic_error_threshold=20.0)
+                        e1, e2, e3, e4 = st.columns(4)
+                        e1.metric("MAE", f"{metrics['mean_abs_error']:.2f}")
+                        e2.metric("RI-Error Corr", f"{metrics['ri_error_correlation']:.3f}")
+                        e3.metric("Catastrophic Rate", f"{metrics['catastrophic_rate']:.2%}")
+                        e4.metric("Accept Rate", f"{metrics.get('accept_rate', 0):.2%}")
+            except Exception as exc:
+                st.error(f"Evaluation error: {exc}")
+
+        # Sensor correlation & distribution
+        raw_df = result["raw_df"]
+        if isinstance(raw_df, list):
+            raw_df = pd.DataFrame(raw_df)
+
+        st.markdown('<p class="section-header">Sensor Analytics</p>', unsafe_allow_html=True)
+        sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
+
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            st.caption("Correlation Matrix (first 12 sensors)")
+            corr_cols = [c for c in sensor_cols if c in raw_df.columns][:12]
+            corr = raw_df[corr_cols].corr()
+            if px is not None:
+                fig_corr = px.imshow(corr, color_continuous_scale="RdBu_r", title="Sensor Correlation")
+                _make_plotly_dark(fig_corr)
+                st.plotly_chart(fig_corr, use_container_width=True)
+            else:
+                st.dataframe(corr.round(3), use_container_width=True)
+
+        with ac2:
+            hist_sensor = st.selectbox("Sensor distribution", sensor_cols, index=1)
+            if px is not None:
+                fig_h = px.histogram(raw_df, x=hist_sensor, nbins=20, color_discrete_sequence=["#8b5cf6"], title=f"{hist_sensor} Distribution")
+                _make_plotly_dark(fig_h)
+                st.plotly_chart(fig_h, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Page: Settings
+# ═══════════════════════════════════════════════════════════════
+elif page == "⚙️ Settings":
+    st.markdown('<p class="section-header">System Settings</p>', unsafe_allow_html=True)
+
+    st.markdown("#### Available Backends")
+    for b in backends:
+        st.markdown(f"- **{b['name']}**: {b['description']}")
+
+    st.markdown("#### Validation Commands")
+    st.code("python scripts\\run_validation_suite.py", language="powershell")
+    st.code("python -m pytest tests\\test_inference_regression.py -q", language="powershell")
+
+    st.markdown("#### MQTT Pipeline")
+    st.code("python ingestion\\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls", language="powershell")
+    st.code("python ingestion\\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000", language="powershell")
+
+    st.markdown("#### Headless Inference")
+    st.code("python scripts\\run_headless_inference.py --csv examples\\sample_cmapss_engine.csv --mode Baseline --backend attention", language="powershell")

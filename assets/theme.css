@@ -1,0 +1,125 @@
+/* ═══════════════════════════════════════════════════════════════
+   Aircraft Engine RUL — Premium Dark Theme
+   ═══════════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* Global overrides */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+/* Hide default Streamlit branding */
+#MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+
+/* Sidebar styling */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0a1628 0%, #0d1f3c 100%) !important;
+    border-right: 1px solid rgba(59,130,246,0.15);
+}
+section[data-testid="stSidebar"] .stMarkdown h1,
+section[data-testid="stSidebar"] .stMarkdown h2,
+section[data-testid="stSidebar"] .stMarkdown h3 {
+    color: #93c5fd !important;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    font-size: 0.7rem !important;
+    margin-top: 1.2rem;
+}
+section[data-testid="stSidebar"] .stRadio label span {
+    font-size: 0.85rem !important;
+}
+
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, rgba(15,23,42,0.9), rgba(30,41,59,0.9));
+    border: 1px solid rgba(59,130,246,0.2);
+    border-radius: 12px;
+    padding: 16px 20px;
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+}
+[data-testid="stMetric"]:hover {
+    border-color: rgba(59,130,246,0.5);
+    box-shadow: 0 0 20px rgba(59,130,246,0.1);
+    transform: translateY(-1px);
+}
+[data-testid="stMetric"] label { color: #94a3b8 !important; font-size: 0.75rem !important; text-transform: uppercase; letter-spacing: 0.8px; }
+[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #f1f5f9 !important; font-weight: 700 !important; font-size: 1.8rem !important; }
+[data-testid="stMetric"] [data-testid="stMetricDelta"] { font-size: 0.8rem !important; }
+
+/* Tabs */
+[data-testid="stTabs"] button { font-weight: 500; letter-spacing: 0.3px; }
+[data-testid="stTabs"] button[aria-selected="true"] {
+    border-bottom-color: #3b82f6 !important;
+    color: #3b82f6 !important;
+}
+
+/* DataFrames */
+[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+
+/* Expanders */
+[data-testid="stExpander"] {
+    border: 1px solid rgba(59,130,246,0.15) !important;
+    border-radius: 10px !important;
+    background: rgba(15,23,42,0.5);
+}
+
+/* Buttons */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    transition: all 0.2s ease;
+}
+.stButton > button:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59,130,246,0.3); }
+
+/* Decision badge pills */
+.badge-accept { background: linear-gradient(135deg, #059669, #10b981); color: white; padding: 4px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; display: inline-block; }
+.badge-warn { background: linear-gradient(135deg, #d97706, #f59e0b); color: white; padding: 4px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; display: inline-block; }
+.badge-reject { background: linear-gradient(135deg, #dc2626, #ef4444); color: white; padding: 4px 14px; border-radius: 20px; font-weight: 600; font-size: 0.85rem; display: inline-block; }
+
+/* Hero header */
+.hero-title {
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6, #06b6d4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin: 0;
+}
+.hero-subtitle { color: #64748b; font-size: 0.85rem; margin-top: 2px; }
+
+/* Section headers */
+.section-header {
+    color: #e2e8f0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(59,130,246,0.3);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+}
+
+/* Status dot */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+.status-dot.live { background: #10b981; }
+.status-dot.offline { background: #64748b; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* Progress bars */
+.ri-bar { height: 8px; border-radius: 4px; overflow: hidden; background: rgba(30,41,59,0.8); }
+.ri-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+.ri-fill-high { background: linear-gradient(90deg, #059669, #10b981); }
+.ri-fill-mid { background: linear-gradient(90deg, #d97706, #f59e0b); }
+.ri-fill-low { background: linear-gradient(90deg, #dc2626, #ef4444); }
+
+/* Fleet table gate colors */
+.gate-accept { color: #10b981; font-weight: 700; }
+.gate-warn { color: #f59e0b; font-weight: 700; }
+.gate-reject { color: #ef4444; font-weight: 700; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0f172a; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
