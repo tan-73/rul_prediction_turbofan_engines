@@ -1,19 +1,20 @@
-﻿# Aircraft Engine RUL System
+# PhysGen-RUL — Aircraft Engine Remaining Useful Life Prediction
 
-Streamlit-first aircraft engine RUL project for NASA C-MAPSS FD001 with:
+Physics-Integrated Generative Edge-AI for Aero-Engine Prognostics  
+**IEEE IES GenAI Challenge 2026 · NASA C-MAPSS FD001**
 
-- Baseline attention model inference
-- Physics-Informed model inference
-- Reliability Index (RI) and post-prediction gating (`ACCEPT` / `WARN` / `REJECT`)
-- Live MQTT digital twin ingestion and monitoring
-- Headless/API scripts and edge export/benchmark utilities
+---
 
-## Primary Runtime
+## Features
 
-- Main UI: `streamlit run app.py`
-- Live MQTT panel is integrated inside Streamlit (`Live Digital Twin Feed`)
-
-The React app is kept in `frontend/`, but Streamlit is the primary operational UI.
+- **Multi-model inference** — Attention GRU (Baseline / Physics-Informed), LightGBM, and Physics-Informed LightGBM via plug-and-play backend registry
+- **Reliability Index (RI)** — calibrated prediction trustworthiness scoring
+- **Post-prediction gating** — `ACCEPT` / `WARN` / `REJECT` decisions with reason codes
+- **CPC scoring** — Counterfactual Physical Consistency checks on predictions
+- **Premium Streamlit dashboard** — dark glassmorphism theme, 5 navigation pages, rich Plotly charts
+- **Live MQTT digital twin** — real-time sensor streaming with Node-RED integration
+- **FastAPI backend** — RESTful endpoints with model backend discovery
+- **Edge deployment** — TFLite export and benchmark scripts
 
 ## Quick Start
 
@@ -24,147 +25,127 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-If TensorFlow import shows protobuf descriptor errors:
+## Model Backends
+
+The system uses a **BackendRegistry** pattern for plug-and-play model switching:
+
+| Backend | Description | Modes |
+|---------|-------------|-------|
+| `attention` | Attention GRU encoder-decoder (default) | Baseline, Physics-Informed |
+| `artifact` | LightGBM from `model_artifacts.zip` | Baseline |
+| `pi-lightgbm` | LightGBM + physics constraint post-processing | Baseline |
+
+Select backends in the Streamlit sidebar or via CLI:
 
 ```powershell
-pip install "protobuf<=3.20.3"
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --backend attention
+python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --backend pi-lightgbm
 ```
 
-## Local Digital Twin (Mosquitto, No TLS)
+## Streamlit Dashboard Pages
 
+| Page | Description |
+|------|-------------|
+| 🏠 Fleet Overview | Upload CSV, fleet inference, engine table, RUL charts, per-engine deep dive |
+| 📡 Live Digital Twin | Real-time MQTT feed, auto-refresh, decision tracking |
+| 📈 RUL Trajectories | Streaming replay — cycle-by-cycle RUL evolution |
+| 🔬 Batch Inference | Detailed analytics, sensor correlation, ground-truth evaluation |
+| ⚙️ Settings | Backend discovery, validation commands, MQTT setup |
+
+## Local Digital Twin (MQTT)
+
+Requires [Mosquitto](https://mosquitto.org/) running on `localhost:1883`.  
 Run in separate terminals:
 
-1. MQTT ingest + inference subscriber
-
 ```powershell
-python ingestion\mqtt_secure_ingest.py ^
-  --broker 127.0.0.1 ^
-  --port 1883 ^
-  --topic engines/fd001/raw ^
-  --model-mode Baseline ^
-  --insecure-no-tls
-```
+# 1. MQTT ingest + inference subscriber
+python ingestion\mqtt_secure_ingest.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --model-mode Baseline --insecure-no-tls
 
-2. Digital twin publisher
+# 2. Digital twin publisher
+python ingestion\digital_twin_streamer.py --broker 127.0.0.1 --port 1883 --topic engines/fd001/raw --interval-sec 0.5 --cycles 3000
 
-```powershell
-python ingestion\digital_twin_streamer.py ^
-  --broker 127.0.0.1 ^
-  --port 1883 ^
-  --topic engines/fd001/raw ^
-  --interval-sec 0.5 ^
-  --cycles 3000
-```
-
-3. Streamlit app
-
-```powershell
+# 3. Streamlit app
 streamlit run app.py
 ```
 
-Streamlit reads:
+### Node-RED Digital Twin
 
-- `logs/mqtt_events.ndjson`
-- `logs/mqtt_predictions.csv`
-- `logs/live_state.json`
+A Node-RED flow (`flows.json`) simulates realistic engine sensor data with:
+- 6 sensor sections: vibration, thermal, pressure, flow, mechanical, RUL model
+- cVAE-RUL pipeline with physics risk and CPC scoring
+- MQTT publishing to `engine/rul` and `engine/sensors/all`
+- Dashboard controls: reset engine, force failure, inject anomaly, degradation speed slider
 
-## Optional Artifact Backend (model_artifacts.zip)
+Import `flows.json` into Node-RED and configure the broker to `localhost:1883`.
 
-An optional notebook-exported backend is now available behind the model service adapter boundary.
-
-- Archive path: `model_artifacts.zip` at repo root
-- Backend selector value: `artifact`
-- Default backend remains `attention` (Baseline / Physics-Informed behavior unchanged)
-
-CLI usage:
-
-```powershell
-python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline --backend artifact
-```
-
-Validation/benchmark:
-
-```powershell
-python scripts\run_validation_suite.py --include-artifact-backend
-python scripts\benchmark_model_backends.py
-```
-
-## Input Format (CSV Inference)
-
-Accepted:
-
-- Named C-MAPSS columns:
-  `unit_nr,time_cycles,op_setting_1,op_setting_2,op_setting_3,s_1..s_21`
-- Or at least 26 raw columns in original C-MAPSS order
-
-Examples:
-
-- `examples/sample_cmapss_engine.csv`
-- `examples/sample_cmapss_engine_dual.csv`
-- `examples/scenarios/scenario_stable_behavior.csv`
-- `examples/scenarios/scenario_noisy_behavior.csv`
-- `examples/scenarios/scenario_rapid_degradation.csv`
-
-## Core Modules
-
-- `app.py`: Streamlit dashboard (batch + live MQTT)
-- `inference/attention_model.py`: model loading/preprocessing/inference/replay
-- `inference/reliability.py`: RI, gating, reason codes, evaluation utilities
-- `backend/model_service.py`: model adapter/service boundary
-- `backend/api.py`: FastAPI endpoints
-- `ingestion/mqtt_secure_ingest.py`: MQTT subscriber + model inference + logs
-- `ingestion/mqtt_simulator.py`: CSV-to-MQTT publisher
-- `ingestion/digital_twin_streamer.py`: synthetic digital twin publisher
-
-## Notebook Training and Export
-
-Notebook:
-
-- `notebooks/cmapss_notebooks/predicting-remaining-useful-life-turbofan-engine.ipynb`
-
-It is prepared for Kaggle `Run All` and includes final cells to export trained artifacts.
-
-Expected Kaggle outputs:
-
-- `/kaggle/working/model_artifacts/`
-- `/kaggle/working/model_artifacts.zip`
-
-Local archive currently present in project root:
-
-- `model_artifacts.zip`
-
-This artifact comes from notebook training (LightGBM workflow). Validate it against project RUL metrics before replacing default attention-model inference.
-
-## Validation and Regression
-
-Generate validation summaries and golden outputs:
-
-```powershell
-python scripts\run_validation_suite.py
-```
-
-Run regression test:
-
-```powershell
-python -m pytest tests\test_inference_regression.py -q
-```
-
-## Other Useful Commands
-
-Headless inference:
-
-```powershell
-python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv --mode Baseline
-```
-
-API:
+## API
 
 ```powershell
 python scripts\run_api.py --host 0.0.0.0 --port 8000
 ```
 
-Ablation report:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/v1/backends` | GET | List available model backends |
+| `/v1/infer/file` | POST | Inference from uploaded CSV |
+| `/v1/infer/json` | POST | Inference from JSON row batch |
+| `/v1/compare/json` | POST | Baseline vs PI side-by-side comparison |
+| `/v1/replay/json` | POST | Streaming cycle-by-cycle replay |
+
+## Input Format (CSV)
+
+Accepted formats:
+- Named C-MAPSS columns: `unit_nr,time_cycles,op_setting_1..3,s_1..s_21`
+- Or at least 26 raw columns in original C-MAPSS order
+
+Example files:
+- `examples/sample_cmapss_engine.csv`
+- `examples/sample_cmapss_engine_dual.csv`
+- `examples/scenarios/scenario_stable_behavior.csv`
+- `examples/scenarios/scenario_rapid_degradation.csv`
+
+## Project Structure
+
+```
+├── app.py                           # Streamlit dashboard (primary UI)
+├── assets/theme.css                 # Premium dark theme CSS
+├── .streamlit/config.toml           # Streamlit dark theme config
+├── backend/
+│   ├── api.py                       # FastAPI endpoints
+│   ├── model_service.py             # BackendRegistry + ModelService
+│   ├── artifact_backend.py          # LightGBM artifact adapter
+│   ├── pi_lightgbm_backend.py       # Physics-Informed LightGBM adapter
+│   └── schemas.py                   # Pydantic request schemas
+├── inference/
+│   ├── attention_model.py           # Attention GRU model + preprocessing
+│   └── reliability.py               # RI, gating, reason codes, evaluation
+├── ingestion/
+│   ├── mqtt_secure_ingest.py        # MQTT subscriber + inference + logging
+│   ├── mqtt_simulator.py            # CSV-to-MQTT publisher
+│   ├── digital_twin_streamer.py     # Synthetic digital twin publisher
+│   └── nodered_subscriber.py        # Node-RED MQTT subscriber for Streamlit
+├── scripts/
+│   ├── run_api.py                   # FastAPI launcher
+│   ├── run_headless_inference.py    # CLI inference runner
+│   ├── run_validation_suite.py      # Validation + golden output generation
+│   ├── generate_ablation_report.py  # Ablation study report generator
+│   ├── export_tflite_edge.py        # TFLite edge model export
+│   └── benchmark_edge_inference.py  # Edge inference benchmarking
+├── tests/
+│   └── test_inference_regression.py # Golden output regression tests
+├── flows.json                       # Node-RED digital twin flow
+├── model_artifacts.zip              # LightGBM exported model
+└── PROJECT_REPORT.md                # Full academic project report
+```
+
+## Validation
 
 ```powershell
-python scripts\generate_ablation_report.py --freeze-config reproducibility\fd001_ablation_freeze.json --test-path <test_FD001.txt> --rul-path <RUL_FD001.txt>
+python scripts\run_validation_suite.py
+python -m pytest tests\test_inference_regression.py -q
 ```
+
+## License
+
+MIT — See `LICENSE.md`
