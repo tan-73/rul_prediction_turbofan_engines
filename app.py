@@ -19,6 +19,9 @@ except ImportError:
 from backend.model_service import ModelService
 from inference.attention_model import RAW_COLUMN_NAMES, maintenance_status
 from inference.reliability import evaluate_reliability_log
+from inference.cvae_trajectory import TrajectoryGenerator
+from inference.llm_explainer import MaintenanceExplainer, ExplanationContext
+from inference.shap_explainer import SHAPExplainer
 
 # ═══════════════════════════════════════════════════════════════
 # Page Config & Theme
@@ -67,6 +70,18 @@ def _gate_color(decision: str) -> str:
 @st.cache_resource
 def get_model_service() -> ModelService:
     return ModelService()
+
+@st.cache_resource
+def get_trajectory_gen() -> TrajectoryGenerator:
+    return TrajectoryGenerator()
+
+@st.cache_resource
+def get_explainer() -> MaintenanceExplainer:
+    return MaintenanceExplainer()
+
+@st.cache_resource
+def get_shap() -> SHAPExplainer:
+    return SHAPExplainer()
 
 
 def _read_live_state() -> dict:
@@ -289,14 +304,135 @@ if page == "🏠 Fleet Overview":
                     _make_plotly_dark(fig_a)
                     st.plotly_chart(fig_a, use_container_width=True)
 
-            # Sensor trends
+            # ── GenAI: Trajectory Fan Plot ──
+            st.divider()
+            st.markdown('<p class="section-header">🔮 Probabilistic RUL Trajectories (cVAE / Monte Carlo)</p>', unsafe_allow_html=True)
+            traj_gen = get_trajectory_gen()
+            traj_result = traj_gen.generate(
+                current_rul=float(predictions[sel_engine]),
+                reliability_index=float(sel_rel["ri"]),
+                window_predictions=sel_windows,
+                n_trajectories=50,
+                trajectory_length=30,
+            )
+            if px is not None and go is not None:
+                steps = list(range(1, len(traj_result["mean"]) + 1))
+                fig_fan = go.Figure()
+                # 95% CI band
+                fig_fan.add_trace(go.Scatter(
+                    x=steps + steps[::-1],
+                    y=traj_result["ci_95_upper"] + traj_result["ci_95_lower"][::-1],
+                    fill="toself", fillcolor="rgba(59,130,246,0.1)",
+                    line=dict(color="rgba(0,0,0,0)"), name="95% CI", showlegend=True,
+                ))
+                # 50% CI band
+                fig_fan.add_trace(go.Scatter(
+                    x=steps + steps[::-1],
+                    y=traj_result["ci_50_upper"] + traj_result["ci_50_lower"][::-1],
+                    fill="toself", fillcolor="rgba(139,92,246,0.25)",
+                    line=dict(color="rgba(0,0,0,0)"), name="50% CI", showlegend=True,
+                ))
+                # Median trajectory
+                fig_fan.add_trace(go.Scatter(
+                    x=steps, y=traj_result["median"],
+                    line=dict(color="#06b6d4", width=3), name="Median",
+                ))
+                # Mean trajectory
+                fig_fan.add_trace(go.Scatter(
+                    x=steps, y=traj_result["mean"],
+                    line=dict(color="#f59e0b", width=2, dash="dash"), name="Mean",
+                ))
+                # Sample trajectories (faint)
+                for i in range(min(8, len(traj_result["trajectories"]))):
+                    fig_fan.add_trace(go.Scatter(
+                        x=steps, y=traj_result["trajectories"][i],
+                        line=dict(color="rgba(148,163,184,0.15)", width=1),
+                        showlegend=False, hoverinfo="skip",
+                    ))
+                fig_fan.update_layout(title=f"U-{sel_engine:03d} Probabilistic RUL Fan ({traj_result['generation_mode'].upper()})", xaxis_title="Future Cycles", yaxis_title="Predicted RUL")
+                _make_plotly_dark(fig_fan)
+                st.plotly_chart(fig_fan, use_container_width=True)
+
+                fc1, fc2, fc3 = st.columns(3)
+                fc1.metric("Mode", traj_result["generation_mode"].upper())
+                if "mean_time_to_failure" in traj_result:
+                    fc2.metric("Mean Time to Failure", f"{traj_result['mean_time_to_failure']:.0f} cycles")
+                if "physics_violation_rate" in traj_result:
+                    fc3.metric("Physics Violation Rate", f"{traj_result['physics_violation_rate']:.1%}")
+
+            # ── GenAI: SHAP Sensor Attribution ──
+            st.divider()
+            st.markdown('<p class="section-header">🔬 Sensor Attribution (SHAP-style)</p>', unsafe_allow_html=True)
+
             raw_df = result["raw_df"]
             if isinstance(raw_df, list):
                 raw_df = pd.DataFrame(raw_df)
             engine_df = raw_df[raw_df["unit_nr"] == sel_engine].sort_values("time_cycles")
-            sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
 
-            st.markdown('<p class="section-header">Live Sensor Telemetry</p>', unsafe_allow_html=True)
+            shap_ex = get_shap()
+            shap_result = shap_ex.explain(
+                sensor_df=engine_df,
+                attention_weights=sel_attention if sel_attention else None,
+                sensor_window=engine_df[[c for c in engine_df.columns if c.startswith("s_")]].values[-30:] if len(engine_df) >= 30 else None,
+            )
+
+            if px is not None:
+                contrib_df = pd.DataFrame(shap_result["contributions"])
+                if not contrib_df.empty:
+                    contrib_df = contrib_df.sort_values("contribution")
+                    colors = ["#ef4444" if d == "increases_risk" else "#10b981" for d in contrib_df["direction"]]
+                    fig_shap = go.Figure(go.Bar(
+                        x=contrib_df["contribution"], y=contrib_df["name"],
+                        orientation="h", marker_color=colors,
+                    ))
+                    fig_shap.update_layout(title=f"U-{sel_engine:03d} Sensor Attribution", xaxis_title="Contribution (← healthy | risk →)", yaxis_title="")
+                    _make_plotly_dark(fig_shap)
+                    fig_shap.update_layout(height=max(350, len(contrib_df) * 30))
+                    st.plotly_chart(fig_shap, use_container_width=True)
+
+                    # Group importance
+                    if shap_result["group_importance"]:
+                        grp_df = pd.DataFrame([
+                            {"group": g.title(), "importance": v["total"]}
+                            for g, v in shap_result["group_importance"].items()
+                        ])
+                        fig_grp = px.bar(grp_df, x="group", y="importance", color="group",
+                                        color_discrete_sequence=["#f59e0b", "#ef4444", "#06b6d4", "#8b5cf6"],
+                                        title="Sensor Group Importance")
+                        _make_plotly_dark(fig_grp)
+                        st.plotly_chart(fig_grp, use_container_width=True)
+
+                    # Anomaly flags
+                    if shap_result["anomalies"]:
+                        st.warning(f"⚠️ **Anomalous sensors detected:** {', '.join(f'{k} ({v})' for k, v in shap_result['anomalies'].items())}")
+
+            # ── GenAI: AI Maintenance Brief ──
+            st.divider()
+            st.markdown('<p class="section-header">🤖 AI Maintenance Brief</p>', unsafe_allow_html=True)
+
+            explainer = get_explainer()
+            expl_ctx = ExplanationContext(
+                engine_id=sel_engine,
+                predicted_rul=float(predictions[sel_engine]),
+                trusted_rul=float(sel_rel["trusted_rul"]),
+                reliability_index=float(sel_rel["ri"]),
+                decision=sel_rel["decision"],
+                reason_codes=sel_rel["reason_codes"],
+                window_predictions=sel_windows,
+                attention_weights=sel_attention,
+                sensor_anomalies=shap_result.get("anomalies"),
+                model_backend=selected_backend,
+                model_mode=model_mode,
+            )
+            explanation = explainer.explain(expl_ctx)
+
+            badge_cls = {"CRITICAL": "badge-reject", "HIGH": "badge-reject", "MODERATE": "badge-warn", "LOW": "badge-accept"}
+            st.markdown(f'{explanation["urgency_icon"]} **Urgency: {explanation["urgency"]}** · Generated via `{explanation["mode"]}` engine', unsafe_allow_html=True)
+            st.markdown(explanation["text"])
+
+            # Sensor trends
+            sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
+            st.markdown('<p class="section-header">📊 Sensor Telemetry</p>', unsafe_allow_html=True)
             sel_sensors = st.multiselect("Sensors", sensor_cols, default=["s_2", "s_3", "s_4", "s_7", "s_11", "s_15"])
             if sel_sensors and px is not None:
                 trend = engine_df[["time_cycles"] + sel_sensors].melt(id_vars="time_cycles", var_name="sensor", value_name="reading")
