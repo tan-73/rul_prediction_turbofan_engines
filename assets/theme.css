@@ -8,13 +8,21 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-/* Hide default Streamlit branding */
-#MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+/* Hide default Streamlit branding but keep the header (sidebar toggle lives there) */
+#MainMenu, footer { visibility: hidden; }
+header[data-testid="stHeader"] { background: transparent !important; }
 
-/* Sidebar styling */
+/* Sidebar — always visible, never collapse */
 section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0a1628 0%, #0d1f3c 100%) !important;
     border-right: 1px solid rgba(59,130,246,0.15);
+    min-width: 310px !important;
+    width: 310px !important;
+}
+/* Hide the collapse button so sidebar can't be hidden */
+button[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"] {
+    display: none !important;
 }
 section[data-testid="stSidebar"] .stMarkdown h1,
 section[data-testid="stSidebar"] .stMarkdown h2,
