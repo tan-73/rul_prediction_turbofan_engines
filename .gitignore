@@ -12,6 +12,7 @@ __pycache__/
 venv/
 env/
 ENV/
+temp_env/
 
 # -----------------------------
 # Build / packaging artifacts
@@ -64,6 +65,8 @@ desktop.ini
 logs/
 tmp/
 temp/
+artifacts_inspect/
+artifacts_inspect2/
 reports/
 reports/**
 frontend/node_modules/
