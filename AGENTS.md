@@ -29,6 +29,9 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - Digital twin publisher: `ingestion/digital_twin_streamer.py`
 - Node-RED subscriber: `ingestion/nodered_subscriber.py`
 - Node-RED flow definition: `flows.json`
+- cVAE trajectory generator: `inference/cvae_trajectory.py`
+- LLM maintenance explainer: `inference/llm_explainer.py`
+- SHAP sensor attribution: `inference/shap_explainer.py`
 - Ablation report generation: `scripts/generate_ablation_report.py`
 - Validation suite: `scripts/run_validation_suite.py`, `tests/test_inference_regression.py`
 - Academic report: `PROJECT_REPORT.md`
@@ -41,6 +44,8 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 4. Reliability gating must remain post-prediction usage gating.
 5. BackendRegistry must remain the single source of truth for model adapters.
 6. Do not modify physics thresholds in `pi_lightgbm_backend.py` without domain justification.
+7. cVAE, SHAP, and LLM modules must remain independent — usable without each other.
+8. LLM explainer must always work without API key (template fallback).
 
 ## Model Swapping Contract
 

@@ -20,6 +20,9 @@ This project develops a production-grade RUL prediction system that combines:
 - **Attention-based GRU encoder-decoder** networks for sequence modeling
 - **Physics-Informed Neural Networks (PINNs)** that embed thermodynamic constraints
 - **LightGBM gradient-boosted trees** with physics-informed post-processing
+- **Conditional VAE trajectory generator** for probabilistic RUL paths (Generative AI)
+- **LLM-powered explanation engine** for natural language maintenance briefs (Generative AI)
+- **SHAP-style sensor attribution** for interpretable per-sensor contribution analysis
 - **Real-time digital twin integration** via MQTT and Node-RED
 - A **Streamlit dashboard** for fleet-level monitoring and decision support
 
@@ -48,9 +51,12 @@ Given multivariate sensor time-series data from turbofan engines operating under
 3. Integrate a LightGBM gradient-boosted tree model with physics-informed post-processing for a hybrid PI-LightGBM approach
 4. Implement a post-prediction Reliability Index (RI) and gating framework for operational decision support
 5. Build a plug-and-play model backend system for seamless switching between model architectures
-6. Create a premium Streamlit dashboard with fleet-level monitoring, per-engine deep-dive, and live digital twin feed
-7. Develop a Node-RED-based digital twin simulation for realistic sensor data generation
-8. Provide FastAPI endpoints and headless CLI tools for production deployment
+6. Implement a Conditional VAE trajectory generator for probabilistic RUL predictions with confidence intervals
+7. Develop an LLM-powered explanation engine for natural language maintenance briefs
+8. Build SHAP-style sensor attribution analysis for per-sensor contribution to RUL
+9. Create a premium Streamlit dashboard with fleet-level monitoring, per-engine deep-dive, GenAI panels, and live digital twin feed
+10. Develop a Node-RED-based digital twin simulation for realistic sensor data generation
+11. Provide FastAPI endpoints and headless CLI tools for production deployment
 
 ## 1.5 Scope
 
@@ -130,6 +136,9 @@ The RI enables post-prediction gating (`ACCEPT`/`WARN`/`REJECT`) for safe operat
 | Physics constraints are rarely integrated into ML predictions | PINN training + post-prediction CPC scoring |
 | No plug-and-play model switching in existing systems | BackendRegistry pattern enables seamless model swaps |
 | Limited real-time digital twin integration | MQTT + Node-RED + Streamlit live dashboard |
+| No probabilistic RUL trajectories | cVAE / Monte Carlo trajectory generator with confidence intervals |
+| No natural language explanations for operators | LLM-powered maintenance briefs (Gemini API + template fallback) |
+| Limited sensor-level interpretability | SHAP-style per-sensor attribution with anomaly detection |
 | Edge deployment not considered | TFLite export + benchmark scripts for Raspberry Pi |
 
 ---
@@ -557,6 +566,10 @@ The Streamlit dashboard provides the following visualizations:
 7. **Sensor Correlation Matrix** — inter-sensor relationships
 8. **Streaming Replay Trajectory** — cycle-by-cycle RUL evolution
 9. **Live MQTT RUL Feed** — real-time prediction trajectory from digital twin
+10. **Probabilistic RUL Fan Plot** — cVAE / Monte Carlo trajectory fan with 95% and 50% confidence bands, median/mean lines, and sample traces
+11. **Sensor Attribution Bar Chart** — SHAP-style horizontal bar chart showing per-sensor contribution to RUL risk (red = risk, green = healthy)
+12. **Sensor Group Importance** — aggregated importance by physical category (thermal, pressure, mechanical, flow)
+13. **AI Maintenance Brief** — structured natural language report with urgency level, decision rationale, diagnostic flags, and recommended actions
 
 ---
 
@@ -608,7 +621,10 @@ RESTful endpoints:
 
 Premium dark-theme dashboard with 5 navigation pages:
 
-1. **🏠 Fleet Overview** — Upload CSV, run fleet inference, view engine table with RI/CPC/gate, RUL distribution charts, per-engine deep dive (window RUL, attention weights, sensor telemetry)
+1. **🏠 Fleet Overview** — Upload CSV, run fleet inference, view engine table with RI/CPC/gate, RUL distribution charts, per-engine deep dive with GenAI panels:
+   - **🔮 Probabilistic RUL Trajectories** — cVAE / Monte Carlo fan plot with 95%/50% CI bands
+   - **🔬 Sensor Attribution (SHAP)** — per-sensor contribution bar chart with group importance
+   - **🤖 AI Maintenance Brief** — LLM/template-generated maintenance report with urgency level
 
 2. **📡 Live Digital Twin** — Real-time MQTT feed showing predicted/trusted RUL, RI trajectory, decision distribution, auto-refresh capability
 
@@ -684,19 +700,20 @@ This project developed a comprehensive, production-grade system for predicting t
 2. **Synthetic data:** C-MAPSS is a simulation; real engine sensor data may exhibit different noise characteristics and failure modes.
 3. **Early RUL clipping:** The 125-cycle cap limits the model's ability to predict very long RULs, which may be relevant for low-usage engines.
 4. **LightGBM compatibility:** The `model_artifacts.zip` has sklearn version dependencies that must match the runtime environment.
-5. **No uncertainty quantification:** The system provides RI as a proxy for confidence but does not produce probabilistic (distributional) RUL predictions.
+5. **cVAE training data:** The cVAE trajectory generator currently uses Monte Carlo fallback; training on FD001 data would produce more accurate degradation-pattern-driven trajectories.
 6. **Edge latency:** The full attention GRU model requires ~200-500ms per inference on CPU, which may be insufficient for very high-frequency monitoring.
 
 ## 9.3 Future Work
 
 1. **Multi-dataset evaluation:** Extend to FD002, FD003, FD004 datasets and cross-dataset transfer learning
-2. **Probabilistic predictions:** Implement Monte Carlo Dropout or Deep Ensembles for distributional RUL with prediction intervals
+2. **cVAE training:** Train the Conditional VAE on full FD001 training data for learned degradation pattern generation
 3. **Federated learning:** Enable multi-fleet training without sharing raw sensor data across operators
 4. **Reinforcement learning:** Optimize maintenance scheduling by treating RUL predictions as state inputs to an RL agent
-5. **SHAP explainability:** Add SHapley Additive exPlanations for per-sensor attribution of RUL predictions
+5. **Diffusion model augmentation:** Use diffusion models to generate synthetic rare failure patterns for data augmentation
 6. **Real sensor data validation:** Partner with MRO providers for validation on actual fleet maintenance records
-7. **Kubernetes deployment:** Containerize the full stack (API + Dashboard + MQTT) for scalable cloud deployment
-8. **Mobile dashboard:** Develop a companion mobile app for field engineers
+7. **Dockerization:** Containerize the full stack (API + Dashboard + MQTT + Node-RED) for portable deployment
+8. **Kubernetes deployment:** Orchestrate containers for scalable cloud deployment
+9. **Mobile dashboard:** Develop a companion mobile app for field engineers
 
 ---
 
@@ -851,4 +868,51 @@ def gate_prediction(predicted_rul, reliability_index, window_predictions,
         return {"decision": "WARN", "trusted_rul": predicted_rul}
     else:
         return {"decision": "REJECT", "trusted_rul": conservative_fallback}
+```
+
+## A.6 cVAE Trajectory Generator
+
+```python
+class ConditionalVAE(tf.keras.Model):
+    def __init__(self, latent_dim=16, trajectory_length=30):
+        super().__init__()
+        self.encoder = CVAEEncoder(latent_dim)
+        self.decoder = CVAEDecoder(trajectory_length)
+
+    def reparameterize(self, mu, log_var):
+        eps = tf.random.normal(shape=tf.shape(mu))
+        return mu + tf.exp(0.5 * log_var) * eps
+
+    def generate_trajectories(self, condition, n_samples=50):
+        z = tf.random.normal(shape=(n_samples, self.latent_dim))
+        decoder_input = tf.concat([z, condition_batch], axis=-1)
+        return self.decoder(decoder_input).numpy()
+```
+
+## A.7 LLM Maintenance Explainer
+
+```python
+class MaintenanceExplainer:
+    def __init__(self, api_key=None):
+        self._api_key = api_key or os.environ.get("GEMINI_API_KEY")
+
+    def explain(self, ctx: ExplanationContext) -> Dict[str, str]:
+        if self.has_llm:
+            llm_text = generate_llm_explanation(ctx, self._api_key)
+            if llm_text:
+                return {"text": llm_text, "mode": "llm", ...}
+        return {"text": generate_template_explanation(ctx), "mode": "template", ...}
+```
+
+## A.8 SHAP Sensor Attribution
+
+```python
+def compute_attention_sensor_importance(attention_weights, sensor_window):
+    importance = np.zeros(n_sensors)
+    for s in range(n_sensors):
+        weighted_mean = np.average(sensor_vals, weights=attn)
+        weighted_var = np.average((sensor_vals - weighted_mean)**2, weights=attn)
+        trend = np.polyfit(np.arange(T), sensor_vals, deg=1, w=attn)[0]
+        importance[s] = np.sqrt(weighted_var) * np.sign(trend)
+    return _build_contributions(importance)
 ```

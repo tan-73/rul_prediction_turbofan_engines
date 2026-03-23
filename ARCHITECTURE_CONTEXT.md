@@ -37,6 +37,8 @@
 3. Baseline and PI must stay comparable under shared preprocessing.
 4. Baseline mode must never be broken.
 5. BackendRegistry is the single source of truth for model adapters.
+6. cVAE, SHAP, and LLM modules remain independent — usable without each other.
+7. LLM explainer always works without API key (template fallback).
 
 ## Backend Registry
 

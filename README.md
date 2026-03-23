@@ -8,6 +8,9 @@ Physics-Integrated Generative Edge-AI for Aero-Engine Prognostics
 ## Features
 
 - **Multi-model inference** — Attention GRU (Baseline / Physics-Informed), LightGBM, and Physics-Informed LightGBM via plug-and-play backend registry
+- **cVAE Trajectory Generator** — probabilistic RUL degradation paths with confidence intervals (the core Generative AI component)
+- **LLM Maintenance Briefs** — AI-generated natural language reports with optional Gemini API integration
+- **SHAP-style Sensor Attribution** — per-sensor contribution analysis with anomaly detection
 - **Reliability Index (RI)** — calibrated prediction trustworthiness scoring
 - **Post-prediction gating** — `ACCEPT` / `WARN` / `REJECT` decisions with reason codes
 - **CPC scoring** — Counterfactual Physical Consistency checks on predictions
@@ -46,11 +49,17 @@ python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv
 
 | Page | Description |
 |------|-------------|
-| 🏠 Fleet Overview | Upload CSV, fleet inference, engine table, RUL charts, per-engine deep dive |
+| 🏠 Fleet Overview | Upload CSV, fleet inference, engine table, RUL charts, per-engine deep dive with GenAI panels |
 | 📡 Live Digital Twin | Real-time MQTT feed, auto-refresh, decision tracking |
 | 📈 RUL Trajectories | Streaming replay — cycle-by-cycle RUL evolution |
 | 🔬 Batch Inference | Detailed analytics, sensor correlation, ground-truth evaluation |
 | ⚙️ Settings | Backend discovery, validation commands, MQTT setup |
+
+### Per-Engine GenAI Panels (Fleet Overview Deep Dive)
+
+- **🔮 Probabilistic RUL Trajectories** — cVAE / Monte Carlo fan plot with 95% and 50% confidence bands, median/mean lines, and sample trajectories
+- **🔬 Sensor Attribution (SHAP-style)** — horizontal bar chart showing per-sensor contribution to RUL risk, grouped by physical category (thermal, pressure, mechanical, flow)
+- **🤖 AI Maintenance Brief** — structured natural language report with urgency level, decision rationale, diagnostic flags, and recommended actions
 
 ## Local Digital Twin (MQTT)
 
@@ -119,7 +128,10 @@ Example files:
 │   └── schemas.py                   # Pydantic request schemas
 ├── inference/
 │   ├── attention_model.py           # Attention GRU model + preprocessing
-│   └── reliability.py               # RI, gating, reason codes, evaluation
+│   ├── reliability.py               # RI, gating, reason codes, evaluation
+│   ├── cvae_trajectory.py           # cVAE trajectory generator (GenAI)
+│   ├── llm_explainer.py             # LLM maintenance brief engine (GenAI)
+│   └── shap_explainer.py            # SHAP sensor attribution (GenAI)
 ├── ingestion/
 │   ├── mqtt_secure_ingest.py        # MQTT subscriber + inference + logging
 │   ├── mqtt_simulator.py            # CSV-to-MQTT publisher
