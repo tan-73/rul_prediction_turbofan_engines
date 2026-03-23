@@ -1,11 +1,11 @@
 # Core ML + app
 tensorflow==2.20.0
 streamlit==1.50.0
-pandas==2.3.3
-numpy==2.0.2
-scikit-learn==1.6.1
-joblib==1.5.2
-lightgbm==4.6.0
+pandas==2.2.3
+numpy<2.0.0
+scikit-learn==1.0.2
+joblib==1.1.1
+lightgbm==3.3.2
 
 # Visualization
 matplotlib==3.9.4
