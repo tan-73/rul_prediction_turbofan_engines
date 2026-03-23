@@ -479,13 +479,24 @@ elif page == "📡 Live Digital Twin":
     if not latest and not live_df.empty:
         latest = live_df.iloc[-1].to_dict()
 
+    is_buffering = live_state.get("buffering", False) if live_state else False
+    cycles_left = live_state.get("cycles_until_first_prediction", 0) if live_state else 0
+    has_pred = "predicted_rul" in latest
+
     lm = st.columns(6)
     lm[0].metric("Engine", str(live_state.get("engine_id", "-")) if live_state else "-")
     lm[1].metric("Cycles", int(live_state.get("received_cycles_for_engine", 0)) if live_state else 0)
-    lm[2].metric("Predicted RUL", f"{float(latest.get('predicted_rul', 0)):.1f}")
-    lm[3].metric("Trusted RUL", f"{float(latest.get('trusted_rul', 0)):.1f}")
-    lm[4].metric("RI", f"{float(latest.get('ri', 0)):.3f}")
-    lm[5].metric("Decision", str(latest.get("decision", "-")))
+    
+    if is_buffering and not has_pred:
+        lm[2].metric("Predicted RUL", "Wait...", delta=f"{cycles_left} cycles left", delta_color="off")
+        lm[3].metric("Trusted RUL", "Wait...")
+        lm[4].metric("RI", "Wait...")
+        lm[5].metric("Decision", "BUFFERING")
+    else:
+        lm[2].metric("Predicted RUL", f"{float(latest.get('predicted_rul', 0)):.1f}")
+        lm[3].metric("Trusted RUL", f"{float(latest.get('trusted_rul', 0)):.1f}")
+        lm[4].metric("RI", f"{float(latest.get('ri', 0)):.3f}")
+        lm[5].metric("Decision", str(latest.get("decision", "-")))
 
     if live_state:
         st.caption(f"Last update: {live_state.get('updated_at_utc', '-')}")

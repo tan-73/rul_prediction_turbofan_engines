@@ -72,14 +72,29 @@ def _write_live_state(
     latest_sensor_row: Dict[str, float | int],
     prediction_row: Dict[str, object] | None,
     rows_for_engine: List[Dict[str, float | int]],
+    min_cycles: int = DEFAULT_WINDOW_LENGTH,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    received = len(rows_for_engine)
+    buffering = received < min_cycles
+
+    # If buffering and we have no prediction yet, try to preserve the last known prediction
+    existing_prediction = None
+    if prediction_row is None and path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            existing_prediction = existing.get("latest_prediction")
+        except Exception:
+            pass
+
     payload = {
         "updated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
         "engine_id": int(engine_id),
-        "received_cycles_for_engine": int(len(rows_for_engine)),
+        "received_cycles_for_engine": int(received),
         "latest_sensor_row": latest_sensor_row,
-        "latest_prediction": prediction_row,
+        "latest_prediction": prediction_row or existing_prediction,
+        "buffering": buffering,
+        "cycles_until_first_prediction": max(0, min_cycles - received) if buffering else 0,
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -147,6 +162,7 @@ def run() -> None:
                 latest_sensor_row=row,
                 prediction_row=None,
                 rows_for_engine=by_engine[engine_id],
+                min_cycles=max(args.min_cycles, DEFAULT_WINDOW_LENGTH),
             )
             if len(by_engine[engine_id]) < max(args.min_cycles, DEFAULT_WINDOW_LENGTH):
                 return
@@ -173,6 +189,7 @@ def run() -> None:
                 latest_sensor_row=row,
                 prediction_row=out,
                 rows_for_engine=by_engine[engine_id],
+                min_cycles=max(args.min_cycles, DEFAULT_WINDOW_LENGTH),
             )
             print(json.dumps(out))
         except Exception as exc:  # pragma: no cover - runtime ingestion guard.
