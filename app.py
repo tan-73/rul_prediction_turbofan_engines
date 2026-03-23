@@ -571,9 +571,22 @@ elif page == "📈 RUL Trajectories":
             stream_df = st.session_state["replay_df"]
             if px is not None:
                 long = stream_df.melt(id_vars=["time_cycles"], value_vars=["predicted_rul", "trusted_rul"], var_name="series", value_name="rul")
-                fig_s = px.line(long, x="time_cycles", y="rul", color="series", title="Streaming Replay: Raw vs Trusted RUL", color_discrete_sequence=["#06b6d4", "#8b5cf6"])
+                fig_s = px.line(
+                    long,
+                    x="time_cycles",
+                    y="rul",
+                    color="series",
+                    line_dash="series",
+                    markers=True,
+                    title="Streaming Replay: Raw vs Trusted RUL",
+                    color_discrete_map={"predicted_rul": "#06b6d4", "trusted_rul": "#8b5cf6"},
+                    line_dash_map={"predicted_rul": "dash", "trusted_rul": "solid"},
+                )
                 _make_plotly_dark(fig_s)
                 st.plotly_chart(fig_s, use_container_width=True)
+
+                if stream_df["predicted_rul"].round(6).equals(stream_df["trusted_rul"].round(6)):
+                    st.caption("`predicted_rul` overlaps exactly with `trusted_rul` here because the gate did not adjust the raw prediction.")
 
                 if "reliability_index" in stream_df.columns:
                     fig_ri = px.line(stream_df, x="time_cycles", y="reliability_index", color="decision" if "decision" in stream_df.columns else None, title="Reliability Trajectory", color_discrete_map=DECISION_COLORS)

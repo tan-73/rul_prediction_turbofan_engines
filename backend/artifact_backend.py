@@ -9,6 +9,8 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import KernelPCA
+from sklearn.preprocessing import StandardScaler
 
 from inference.attention_model import COLUMNS_TO_BE_DROPPED, EARLY_RUL, RAW_COLUMN_NAMES, WINDOW_LENGTH
 from inference.reliability import compute_reliability_index, gate_prediction, reason_codes
@@ -16,6 +18,19 @@ from inference.reliability import compute_reliability_index, gate_prediction, re
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ZIP = REPO_ROOT / "model_artifacts.zip"
+NOTEBOOK_DROP_COLUMNS = [
+    "unit_nr",
+    "time_cycles",
+    "op_setting_3",
+    "s_1",
+    "s_5",
+    "s_6",
+    "s_10",
+    "s_16",
+    "s_18",
+    "s_19",
+]
+NOTEBOOK_KPCA_COMPONENTS = 5
 
 
 class ArtifactLoadError(RuntimeError):
@@ -79,15 +94,37 @@ class NotebookArtifactRunner:
         by_index.columns = list(range(26))
         attention_like = by_index.drop(columns=COLUMNS_TO_BE_DROPPED, errors="ignore")
         attention_like.columns = [f"f_{i}" for i in range(attention_like.shape[1])]
+        notebook_like = ordered.drop(columns=NOTEBOOK_DROP_COLUMNS, errors="ignore")
+        notebook_like.columns = [str(col) for col in notebook_like.columns]
 
         sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
-        return [
+        candidates: List[Tuple[str, pd.DataFrame]] = [
             ("drop_unit_time", ordered.drop(columns=["unit_nr", "time_cycles"], errors="ignore")),
             ("attention_drop_columns", attention_like),
+            ("notebook_drop_columns", notebook_like),
             ("drop_unit", ordered.drop(columns=["unit_nr"], errors="ignore")),
             ("sensors_only", ordered[sensor_cols]),
             ("raw_all_26", ordered),
         ]
+
+        # The bundled Kaggle notebook trains LightGBM on a 5D KernelPCA projection
+        # of these notebook-style features. Rebuild that shape at runtime so the
+        # artifact backend can interoperate even when only the regressor was exported.
+        if len(notebook_like) >= NOTEBOOK_KPCA_COMPONENTS:
+            scaled = StandardScaler().fit_transform(notebook_like.to_numpy(dtype=float))
+            kpca = KernelPCA(
+                n_components=NOTEBOOK_KPCA_COMPONENTS,
+                kernel="poly",
+                random_state=42,
+            )
+            transformed = kpca.fit_transform(scaled)
+            kpca_df = pd.DataFrame(
+                transformed,
+                columns=[f"kpca_{i}" for i in range(NOTEBOOK_KPCA_COMPONENTS)],
+            )
+            candidates.insert(0, ("notebook_kpca_poly5", kpca_df))
+
+        return candidates
 
     def _select_features(self, raw_df: pd.DataFrame) -> np.ndarray:
         if self._regressor is None:

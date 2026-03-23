@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Protocol, Tuple
 
 import pandas as pd
 
-from backend.artifact_backend import NotebookArtifactRunner, build_artifact_result
+from backend.artifact_backend import ArtifactLoadError, NotebookArtifactRunner, build_artifact_result
 from backend.pi_lightgbm_backend import PILightGBMAdapter
 from inference.attention_model import (
     get_model_weights_path,
@@ -87,13 +87,28 @@ class ArtifactModelAdapter:
         if normalized_mode != "baseline":
             raise ValueError("Artifact backend currently supports Baseline mode semantics only.")
         self._runner = NotebookArtifactRunner()
+        self._fallback_model = None
+
+    def _predict_with_fallback_attention(self, csv_bytes: bytes, reason: str) -> Dict[str, object]:
+        if self._fallback_model is None:
+            self._fallback_model = load_attention_model(get_model_weights_path("Baseline"))
+        result = predict_rul_detailed_from_csv(io.BytesIO(csv_bytes), model=self._fallback_model)
+        sanitized = _sanitize_payload(result)
+        sanitized["artifact_runtime"] = {
+            "fallback_backend": "attention",
+            "fallback_reason": reason,
+        }
+        return sanitized
 
     def predict_detailed_from_csv_bytes(self, csv_bytes: bytes) -> Dict[str, object]:
-        raw_df = read_input_dataframe(io.BytesIO(csv_bytes))
-        preds = self._runner.predict_per_row(raw_df)
-        result = build_artifact_result(raw_df, preds)
-        result["artifact_runtime"] = self._runner.metadata()
-        return _sanitize_payload(result)
+        try:
+            raw_df = read_input_dataframe(io.BytesIO(csv_bytes))
+            preds = self._runner.predict_per_row(raw_df)
+            result = build_artifact_result(raw_df, preds)
+            result["artifact_runtime"] = self._runner.metadata()
+            return _sanitize_payload(result)
+        except ArtifactLoadError as exc:
+            return self._predict_with_fallback_attention(csv_bytes, str(exc))
 
     def replay_from_csv_bytes(self, csv_bytes: bytes, engine_id: int, step: int) -> pd.DataFrame:
         result = self.predict_detailed_from_csv_bytes(csv_bytes)
