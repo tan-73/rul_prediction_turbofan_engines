@@ -46,6 +46,7 @@ NODERED_STATE_FILE = Path("logs") / "nodered_live_state.json"
 DECISION_COLORS = {"ACCEPT": "#10b981", "WARN": "#f59e0b", "REJECT": "#ef4444", "RAW": "#3b82f6"}
 
 PLOTLY_TEMPLATE = "plotly_dark"
+DEFAULT_HOURS_PER_CYCLE = 1.0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -65,6 +66,16 @@ def _ri_bar(value: float) -> str:
 
 def _gate_color(decision: str) -> str:
     return f'<span class="gate-{decision.lower()}">{decision}</span>'
+
+
+def _cycles_to_hours(cycles: float, hours_per_cycle: float) -> float:
+    return float(max(cycles, 0.0) * max(hours_per_cycle, 0.0))
+
+
+def _format_hours(hours: float) -> str:
+    if hours >= 24.0:
+        return f"{hours:.1f} h ({hours / 24.0:.1f} days)"
+    return f"{hours:.1f} h"
 
 
 @st.cache_resource
@@ -170,6 +181,14 @@ with st.sidebar:
         format_func=lambda x: f"{x}  —  {backend_descs.get(x, '')}",
     )
     model_mode = st.selectbox("Model Mode", ["Baseline", "Physics-Informed", COMPARE_MODE], index=0)
+    hours_per_cycle = st.number_input(
+        "Estimated Hours per Cycle",
+        min_value=0.01,
+        max_value=24.0,
+        value=DEFAULT_HOURS_PER_CYCLE,
+        step=0.25,
+        help="C-MAPSS predicts RUL in cycles. This factor converts predicted cycles into approximate flight hours.",
+    )
 
     st.divider()
     st.markdown("### Status")
@@ -216,16 +235,18 @@ if page == "🏠 Fleet Overview":
         engine_ids = result["engine_ids"]
 
         # Top metric row
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Fleet Engines", len(predictions), help="Total engines in uploaded data")
         m2.metric("Mean RUL", f"{overall_rul:.1f}", help="Fleet average remaining useful life (cycles)")
         m3.metric("Reliability Index", f"{overall_ri:.2f}", help="Fleet mean RI (0-1)")
+        m4.metric("Est. Time Before Risk", _format_hours(_cycles_to_hours(overall_rul, hours_per_cycle)), help="Approximate flight time derived from RUL cycles and the sidebar hours-per-cycle setting.")
 
         # Count decisions
         rel_df = build_reliability_df(result)
+        rel_df["est_hours_to_risk"] = rel_df["trusted_rul"].apply(lambda v: _cycles_to_hours(float(v), hours_per_cycle))
         decision_counts = rel_df["decision"].value_counts().to_dict()
-        m4.metric("Accept Gate", f"{decision_counts.get('ACCEPT', 0)}", help=f"RI ≥ 0.75")
-        m5.metric("Warn / Reject", f"{decision_counts.get('WARN', 0)} / {decision_counts.get('REJECT', 0)}")
+        m5.metric("Accept Gate", f"{decision_counts.get('ACCEPT', 0)}", help=f"RI >= 0.75")
+        m6.metric("Warn / Reject", f"{decision_counts.get('WARN', 0)} / {decision_counts.get('REJECT', 0)}")
 
         st.divider()
 
@@ -242,6 +263,7 @@ if page == "🏠 Fleet Overview":
                     "Unit": f"U-{eid:03d}",
                     "Cycles": int(result["num_test_windows_list"][engine_ids.index(eid)]),
                     "Mean RUL": f"{rul:.0f}",
+                    "Est. Hours": _format_hours(_cycles_to_hours(float(rel["trusted_rul"]), hours_per_cycle)),
                     "RI": f"{float(rel['ri']):.2f}",
                     "CPC": f"{float(cpc_val):.2f}" if isinstance(cpc_val, (int, float)) else str(cpc_val),
                     "Gate": rel["decision"],
@@ -286,10 +308,11 @@ if page == "🏠 Fleet Overview":
             sel_windows = result["per_engine_window_rul"][sel_engine]
             sel_attention = result["per_engine_last_attention"][sel_engine]
 
-            d1, d2, d3 = st.columns(3)
+            d1, d2, d3, d4 = st.columns(4)
             d1.metric("Predicted RUL", f"{float(predictions[sel_engine]):.1f}")
             d2.metric("Reliability Index", f"{float(sel_rel['ri']):.2f}")
             d3.markdown(f"**Gate Decision**<br>{_decision_badge(sel_rel['decision'])}", unsafe_allow_html=True)
+            d4.metric("Est. Time Before Risk", _format_hours(_cycles_to_hours(float(sel_rel["trusted_rul"]), hours_per_cycle)))
 
             if px is not None:
                 dc1, dc2 = st.columns(2)
@@ -483,7 +506,7 @@ elif page == "📡 Live Digital Twin":
     cycles_left = live_state.get("cycles_until_first_prediction", 0) if live_state else 0
     has_pred = "predicted_rul" in latest
 
-    lm = st.columns(6)
+    lm = st.columns(7)
     lm[0].metric("Engine", str(live_state.get("engine_id", "-")) if live_state else "-")
     lm[1].metric("Cycles", int(live_state.get("received_cycles_for_engine", 0)) if live_state else 0)
     
@@ -492,11 +515,13 @@ elif page == "📡 Live Digital Twin":
         lm[3].metric("Trusted RUL", "Wait...")
         lm[4].metric("RI", "Wait...")
         lm[5].metric("Decision", "BUFFERING")
+        lm[6].metric("Est. Hours", "Wait...")
     else:
         lm[2].metric("Predicted RUL", f"{float(latest.get('predicted_rul', 0)):.1f}")
         lm[3].metric("Trusted RUL", f"{float(latest.get('trusted_rul', 0)):.1f}")
         lm[4].metric("RI", f"{float(latest.get('ri', 0)):.3f}")
         lm[5].metric("Decision", str(latest.get("decision", "-")))
+        lm[6].metric("Est. Hours", _format_hours(_cycles_to_hours(float(latest.get("trusted_rul", 0)), hours_per_cycle)))
 
     if live_state:
         st.caption(f"Last update: {live_state.get('updated_at_utc', '-')}")
@@ -563,6 +588,8 @@ elif page == "📈 RUL Trajectories":
                 try:
                     replay = service.replay(replay_bytes, model_mode=model_mode, engine_id=int(replay_engine), step=replay_step, model_backend=selected_backend)
                     stream_df = pd.DataFrame(replay["rows"])
+                    if not stream_df.empty and "trusted_rul" in stream_df.columns:
+                        stream_df["est_hours_to_risk"] = stream_df["trusted_rul"].apply(lambda v: _cycles_to_hours(float(v), hours_per_cycle))
                     st.session_state["replay_df"] = stream_df
                 except Exception as exc:
                     st.error(f"Replay failed: {exc}")
