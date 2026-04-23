@@ -766,7 +766,7 @@ def _engine_cross_section_figure(payload: dict):
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown('<p class="hero-title">✈️ PhysGen-RUL</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hero-subtitle">Physics-Integrated Generative Edge-AI<br>IEEE IES GenAI Challenge 2026 · NASA C-MAPSS FD001</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-subtitle">Physics-Integrated Generative Edge-AI<br>NASA C-MAPSS FD001</p>', unsafe_allow_html=True)
     st.divider()
 
     st.markdown("### Monitor")
