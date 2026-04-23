@@ -19,7 +19,7 @@ except ImportError:
 
 from backend.model_service import ModelService
 from inference.attention_model import RAW_COLUMN_NAMES, maintenance_status
-from inference.reliability import evaluate_reliability_log
+from inference.reliability import compute_reliability_index, evaluate_reliability_log, gate_prediction, reason_codes
 from inference.cvae_trajectory import TrajectoryGenerator
 from inference.llm_explainer import MaintenanceExplainer, ExplanationContext
 from inference.shap_explainer import SHAPExplainer
@@ -621,6 +621,146 @@ requestAnimationFrame(draw);
     components.html(html, height=height + 8, scrolling=False)
 
 
+def _render_pipeline_flow(payload: dict, height: int = 240) -> None:
+    steps = [
+        ("CSV / MQTT", "raw engine telemetry"),
+        ("Preprocess", "standardize, scale, 30-cycle window"),
+        ("Backend", f"{payload['backend']}"),
+        ("RUL", f"{payload['predictedRul']:.1f} cycles"),
+        ("RI Gate", f"{payload['decision']} · {payload['ri']:.2f}"),
+        ("Action", f"trusted {payload['trustedRul']:.1f}"),
+    ]
+    cards = "\n".join(
+        f"""
+        <div class="pipe-card">
+          <div class="pipe-index">{idx + 1}</div>
+          <div class="pipe-title">{title}</div>
+          <div class="pipe-sub">{sub}</div>
+        </div>
+        """
+        for idx, (title, sub) in enumerate(steps)
+    )
+    html = f"""
+<div class="pipeline-root">
+  <div class="pipe-rail"></div>
+  <div class="pipe-pulse p1"></div>
+  <div class="pipe-pulse p2"></div>
+  <div class="pipe-grid">{cards}</div>
+</div>
+<style>
+.pipeline-root {{
+  position: relative; height: {height}px; overflow: hidden; border-radius: 16px;
+  border: 1px solid rgba(148,163,184,.2); background:
+  radial-gradient(circle at 20% 25%, rgba(14,165,233,.18), transparent 28%),
+  radial-gradient(circle at 82% 60%, rgba(34,197,94,.13), transparent 28%),
+  linear-gradient(135deg, #020617, #0f172a 52%, #111827);
+  font-family: Inter, Segoe UI, sans-serif; color: #e5e7eb;
+}}
+.pipe-grid {{ position:absolute; inset: 42px 22px; display:grid; grid-template-columns: repeat(6, 1fr); gap: 12px; align-items:stretch; }}
+.pipe-card {{
+  position:relative; padding: 18px 14px; border-radius: 14px; border: 1px solid rgba(148,163,184,.22);
+  background: rgba(15,23,42,.72); box-shadow: 0 16px 42px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.04);
+}}
+.pipe-index {{ width:28px; height:28px; border-radius:50%; display:grid; place-items:center; color:#020617; background:#67e8f9; font-weight:900; }}
+.pipe-title {{ margin-top: 14px; font-size: 16px; font-weight: 850; color:#f8fafc; }}
+.pipe-sub {{ margin-top: 5px; font-size: 12px; color:#cbd5e1; line-height:1.35; }}
+.pipe-rail {{ position:absolute; left:52px; right:52px; top:50%; height:2px; background:linear-gradient(90deg, transparent, rgba(125,211,252,.75), transparent); }}
+.pipe-pulse {{ position:absolute; top:calc(50% - 5px); width:10px; height:10px; border-radius:50%; background:#f59e0b; box-shadow:0 0 28px #f59e0b; animation:flow 5.8s linear infinite; }}
+.pipe-pulse.p2 {{ animation-delay: 2.3s; background:#22c55e; box-shadow:0 0 28px #22c55e; }}
+@keyframes flow {{ from {{ left: 48px; opacity:0; }} 12% {{ opacity:1; }} 88% {{ opacity:1; }} to {{ left: calc(100% - 58px); opacity:0; }} }}
+@media (max-width: 900px) {{ .pipe-grid {{ grid-template-columns: repeat(2, 1fr); inset:18px; }} .pipeline-root {{ height:520px; }} .pipe-rail,.pipe-pulse {{ display:none; }} }}
+</style>
+"""
+    components.html(html, height=height + 8, scrolling=False)
+
+
+def _engine_cross_section_figure(payload: dict):
+    if go is None:
+        return None
+    def ellipse_path(cx: float, cy: float, rx: float, ry: float) -> str:
+        return (
+            f"M {cx - rx},{cy} "
+            f"C {cx - rx},{cy - ry * 0.5523} {cx - rx * 0.5523},{cy - ry} {cx},{cy - ry} "
+            f"C {cx + rx * 0.5523},{cy - ry} {cx + rx},{cy - ry * 0.5523} {cx + rx},{cy} "
+            f"C {cx + rx},{cy + ry * 0.5523} {cx + rx * 0.5523},{cy + ry} {cx},{cy + ry} "
+            f"C {cx - rx * 0.5523},{cy + ry} {cx - rx},{cy + ry * 0.5523} {cx - rx},{cy} Z"
+        )
+
+    section_layout = {
+        "fan": {"x": 0.14, "y": 0.50, "rx": 0.10, "ry": 0.27, "color": "rgba(56,189,248,.14)"},
+        "compressor": {"x": 0.36, "y": 0.50, "rx": 0.15, "ry": 0.20, "color": "rgba(167,139,250,.14)"},
+        "combustor": {"x": 0.57, "y": 0.50, "rx": 0.12, "ry": 0.16, "color": "rgba(249,115,22,.17)"},
+        "turbine": {"x": 0.76, "y": 0.50, "rx": 0.14, "ry": 0.20, "color": "rgba(34,197,94,.13)"},
+    }
+    group_section = {
+        "mechanical": "fan",
+        "pressure": "compressor",
+        "thermal": "combustor",
+        "flow": "turbine",
+        "other": "compressor",
+    }
+    rows = []
+    grouped_counts = {}
+    for sensor in payload.get("sensors", []):
+        group = sensor.get("group", "other")
+        section = group_section.get(group, "compressor")
+        grouped_counts[section] = grouped_counts.get(section, 0) + 1
+        count = grouped_counts[section]
+        cfg = section_layout[section]
+        angle = (count - 1) * 0.72
+        rows.append(
+            {
+                "sensor": sensor["id"],
+                "group": group,
+                "x": cfg["x"] + np.cos(angle) * cfg["rx"] * 0.62,
+                "y": cfg["y"] + np.sin(angle) * cfg["ry"] * 0.70,
+                "size": 12 + min(abs(float(sensor.get("contribution", 0.0))), 1.0) * 24,
+                "color": sensor.get("color", "#94a3b8"),
+                "contribution": float(sensor.get("contribution", 0.0)),
+                "value": sensor.get("value", 0.0),
+                "anomaly": sensor.get("anomaly", ""),
+            }
+        )
+    fig = go.Figure()
+    for name, cfg in section_layout.items():
+        fig.add_shape(
+            type="path",
+            xref="x",
+            yref="y",
+            path=ellipse_path(cfg["x"], cfg["y"], cfg["rx"], cfg["ry"]),
+            fillcolor=cfg["color"],
+            line=dict(color="rgba(203,213,225,.35)", width=1.5),
+        )
+        fig.add_annotation(x=cfg["x"], y=cfg["y"] - cfg["ry"] - 0.055, text=name.title(), showarrow=False, font=dict(size=13, color="#cbd5e1"))
+    fig.add_shape(type="path", path="M 0.05 0.5 C 0.22 0.18, 0.72 0.18, 0.95 0.5 C 0.72 0.82, 0.22 0.82, 0.05 0.5 Z", line=dict(color="rgba(148,163,184,.5)", width=2), fillcolor="rgba(15,23,42,.28)")
+    if rows:
+        df = pd.DataFrame(rows)
+        fig.add_trace(
+            go.Scatter(
+                x=df["x"],
+                y=df["y"],
+                mode="markers+text",
+                text=df["sensor"],
+                textposition="top center",
+                marker=dict(size=df["size"], color=df["color"], line=dict(color="#f8fafc", width=1), opacity=0.9),
+                customdata=np.stack([df["group"], df["contribution"], df["value"], df["anomaly"]], axis=-1),
+                hovertemplate="<b>%{text}</b><br>Group: %{customdata[0]}<br>Contribution: %{customdata[1]:.3f}<br>Value: %{customdata[2]}<br>%{customdata[3]}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Engine Cross-Section Sensor Map",
+        height=460,
+        margin=dict(l=20, r=20, t=48, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(2,6,23,.75)",
+        font=dict(color="#e2e8f0"),
+        showlegend=False,
+    )
+    fig.update_xaxes(visible=False, range=[0, 1])
+    fig.update_yaxes(visible=False, range=[0.05, 0.95], scaleanchor="x", scaleratio=1)
+    return fig
+
+
 # ═══════════════════════════════════════════════════════════════
 # Sidebar
 # ═══════════════════════════════════════════════════════════════
@@ -1179,7 +1319,22 @@ elif page == "🧬 Model Internals":
                     st.session_state["internals_mode"] = effective_mode
                     st.session_state["internals_backend"] = selected_backend
                 except Exception as exc:
-                    st.error(f"Could not build internals view: {exc}")
+                    st.session_state.pop("internals_result", None)
+                    try:
+                        st.session_state["internals_result"] = service.infer(
+                            internals_bytes,
+                            model_mode="Baseline",
+                            model_backend="attention",
+                        )
+                        st.session_state["internals_sig"] = sig
+                        st.session_state["internals_mode"] = "Baseline"
+                        st.session_state["internals_backend"] = "attention"
+                        st.warning(
+                            f"Selected backend `{selected_backend}` could not build the internals view ({exc}). "
+                            "Showing the attention backend visualization instead."
+                        )
+                    except Exception as fallback_exc:
+                        st.error(f"Could not build internals view: {fallback_exc}")
 
     if "internals_result" in st.session_state:
         internals_result = st.session_state["internals_result"]
@@ -1200,17 +1355,66 @@ elif page == "🧬 Model Internals":
                 model_mode=st.session_state.get("internals_mode", model_mode),
                 view_mode=view_mode,
             )
+
+            st.markdown('<p class="section-header">Inference Pipeline Flow</p>', unsafe_allow_html=True)
+            _render_pipeline_flow(payload)
+
+            st.markdown('<p class="section-header">Immersive Model Core</p>', unsafe_allow_html=True)
             _render_model_core_component(payload, height=visual_height)
+
+            st.markdown('<p class="section-header">Engine Cross-Section Sensor Map</p>', unsafe_allow_html=True)
+            cross_fig = _engine_cross_section_figure(payload)
+            if cross_fig is not None:
+                st.plotly_chart(cross_fig, use_container_width=True)
+            else:
+                st.info("Install Plotly to view the engine cross-section sensor map.")
+
+            st.markdown('<p class="section-header">Reliability Gate Simulator</p>', unsafe_allow_html=True)
+            sim_l, sim_r = st.columns([1, 1])
+            with sim_l:
+                base_rul = st.slider("Base RUL", 0.0, 125.0, float(max(payload["predictedRul"], 1.0)), 1.0)
+                spread = st.slider("Prediction Spread", 0.0, 90.0, float(min(max(payload["windowStd"] * 8.0, 4.0), 60.0)), 1.0)
+                upward_jumps = st.slider("Monotonicity Violations", 0, 4, 1 if payload["decision"] != "ACCEPT" else 0)
+                roughness = st.slider("Smoothness Noise", 0.0, 35.0, 8.0 if payload["decision"] != "ACCEPT" else 2.0, 0.5)
+            with sim_r:
+                template = np.linspace(base_rul + spread / 2.0, base_rul - spread / 2.0, 5)
+                if upward_jumps:
+                    for jump_idx in range(min(upward_jumps, 4)):
+                        template[jump_idx + 1] += spread * (0.35 + 0.08 * jump_idx)
+                if roughness:
+                    rough_pattern = np.array([0.0, roughness, -roughness * 0.65, roughness * 0.45, -roughness * 0.25])
+                    template = template + rough_pattern
+                sim_preds = [float(np.clip(v, 0.0, 125.0)) for v in template]
+                sim_metrics = compute_reliability_index(sim_preds)
+                sim_gate = gate_prediction(float(np.mean(sim_preds)), sim_metrics["ri"], sim_preds)
+                sim_reasons = reason_codes(sim_metrics)
+
+                g1, g2, g3 = st.columns(3)
+                g1.metric("Simulated RI", f"{sim_metrics['ri']:.3f}")
+                g2.metric("Decision", str(sim_gate["decision"]))
+                g3.metric("Trusted RUL", f"{float(sim_gate['trusted_rul']):.1f}")
+
+                if go is not None:
+                    sim_fig = go.Figure()
+                    sim_fig.add_trace(go.Scatter(x=list(range(1, 6)), y=sim_preds, mode="lines+markers", line=dict(color=DECISION_COLORS.get(sim_gate["decision"], "#3b82f6"), width=4), marker=dict(size=11), name="window predictions"))
+                    sim_fig.add_hrect(y0=0, y1=125, fillcolor="rgba(15,23,42,.25)", line_width=0)
+                    sim_fig.update_layout(title="Synthetic Window Predictions Driving RI", xaxis_title="Recent window", yaxis_title="RUL", height=300)
+                    _make_plotly_dark(sim_fig)
+                    st.plotly_chart(sim_fig, use_container_width=True)
+                st.caption("Reason codes: " + ", ".join(sim_reasons))
 
             with st.expander("What The Layers Mean"):
                 st.markdown(
                     """
+                    - **Pipeline flow:** operational path from raw telemetry to post-gate maintenance action.
                     - **Sensor shell:** active C-MAPSS sensors grouped by thermal, pressure, mechanical, and flow behavior.
+                    - **Engine cross-section:** maps sensor groups onto a simplified turbofan layout.
                     - **Data flow particles:** normalized sensor windows moving toward inference.
                     - **Attention arcs:** recent 30-cycle timestep focus from the attention backend when available.
                     - **Model core:** selected backend and current RUL estimate.
                     - **Gate ring:** post-prediction Reliability Index, colored by `ACCEPT`, `WARN`, or `REJECT`.
                     - **Future fan:** probabilistic RUL trajectory generated by the cVAE/Monte Carlo trajectory module.
+                    - **Gate simulator:** uses the same RI/gating functions as runtime to show how variance, spread, monotonicity, and smoothness affect decisions.
                     """
                 )
 
