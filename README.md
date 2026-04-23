@@ -14,7 +14,8 @@ Physics-Integrated Generative Edge-AI for Aero-Engine Prognostics
 - **Reliability Index (RI)** — calibrated prediction trustworthiness scoring
 - **Post-prediction gating** — `ACCEPT` / `WARN` / `REJECT` decisions with reason codes
 - **CPC scoring** — Counterfactual Physical Consistency checks on predictions
-- **Premium Streamlit dashboard** — dark glassmorphism theme, 5 navigation pages, rich Plotly charts
+- **Premium Streamlit dashboard** — dark glassmorphism theme, 6 navigation pages, rich Plotly charts, interactive model internals
+- **Model Internals visual explainer** — animated pipeline flow, clickable model core, engine cross-section sensor map, and Reliability Gate Simulator
 - **Live MQTT digital twin** — real-time sensor streaming with Node-RED integration
 - **FastAPI backend** — RESTful endpoints with model backend discovery
 - **Edge deployment** — TFLite export and benchmark scripts
@@ -52,8 +53,20 @@ python scripts\run_headless_inference.py --csv examples\sample_cmapss_engine.csv
 | 🏠 Fleet Overview | Upload CSV, fleet inference, engine table, RUL charts, per-engine deep dive with GenAI panels |
 | 📡 Live Digital Twin | Real-time MQTT feed, auto-refresh, decision tracking |
 | 📈 RUL Trajectories | Streaming replay — cycle-by-cycle RUL evolution |
+| 🧬 Model Internals | Interactive visual explainer for pipeline flow, sensor groups, attention, RI gating, and RUL futures |
 | 🔬 Batch Inference | Detailed analytics, sensor correlation, ground-truth evaluation |
 | ⚙️ Settings | Backend discovery, validation commands, MQTT setup |
+
+### Model Internals Visual Explainer
+
+The **🧬 Model Internals** page turns a single engine prediction into a visual systems map:
+
+- **Inference Pipeline Flow** — animated path from raw `CSV/MQTT` telemetry through preprocessing, backend inference, RUL prediction, RI gating, and trusted maintenance action
+- **Immersive Model Core** — clickable canvas with sensor nodes, attention arcs, RI gate ring, backend/model core, physics field, and future RUL fan
+- **Engine Cross-Section Sensor Map** — turbofan-style layout where sensor nodes are grouped by thermal, pressure, mechanical, and flow categories
+- **Reliability Gate Simulator** — interactive sliders for prediction spread, monotonicity violations, smoothness noise, and base RUL; uses the same RI/gating functions as runtime
+
+If a selected artifact backend cannot build a compatible internals payload, the page falls back to the `attention` backend visualization while preserving the rest of the dashboard.
 
 ### Per-Engine GenAI Panels (Fleet Overview Deep Dive)
 
@@ -114,10 +127,22 @@ Example files:
 - `examples/scenarios/scenario_stable_behavior.csv`
 - `examples/scenarios/scenario_rapid_degradation.csv`
 
+### Gate Demo Fixtures
+
+Verified demo fixtures are provided for each post-prediction gate decision using `Baseline` + `attention`:
+
+| Decision | Files |
+|----------|-------|
+| `ACCEPT` | `examples/scenarios/gate_accept_demo.csv`, `gate_accept_demo_2.csv`, `gate_accept_demo_3.csv` |
+| `WARN` | `examples/scenarios/gate_warn_demo.csv`, `gate_warn_demo_2.csv`, `gate_warn_demo_3.csv` |
+| `REJECT` | `examples/scenarios/gate_reject_demo.csv`, `gate_reject_demo_2.csv`, `gate_reject_demo_3.csv` |
+
+Use these CSVs to demo the Fleet Overview, Model Internals, and Reliability Gate Simulator behavior.
+
 ## Project Structure
 
 ```
-├── app.py                           # Streamlit dashboard (primary UI)
+├── app.py                           # Streamlit dashboard (primary UI + Model Internals visuals)
 ├── assets/theme.css                 # Premium dark theme CSS
 ├── .streamlit/config.toml           # Streamlit dark theme config
 ├── backend/
@@ -146,6 +171,7 @@ Example files:
 │   └── benchmark_edge_inference.py  # Edge inference benchmarking
 ├── tests/
 │   └── test_inference_regression.py # Golden output regression tests
+├── examples/scenarios/gate_*_demo*.csv # ACCEPT/WARN/REJECT demo fixtures
 ├── flows.json                       # Node-RED digital twin flow
 ├── model_artifacts.zip              # LightGBM exported model
 └── PROJECT_REPORT.md                # Full academic project report

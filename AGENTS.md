@@ -10,7 +10,7 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - Baseline and Physics-Informed model modes
 - Reliability Index (RI) and CPC (Counterfactual Physical Consistency) scoring
 - Post-prediction gating (`ACCEPT` / `WARN` / `REJECT`)
-- Premium Streamlit dashboard with 5 navigation pages
+- Premium Streamlit dashboard with 6 navigation pages, including interactive Model Internals visualizations
 - Live MQTT digital twin monitoring (Node-RED + Mosquitto)
 - FastAPI + headless runtime scripts
 - Edge deployment support (TFLite export)
@@ -34,6 +34,7 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - SHAP sensor attribution: `inference/shap_explainer.py`
 - Ablation report generation: `scripts/generate_ablation_report.py`
 - Validation suite: `scripts/run_validation_suite.py`, `tests/test_inference_regression.py`
+- Gate demo fixtures: `examples/scenarios/gate_accept_demo*.csv`, `examples/scenarios/gate_warn_demo*.csv`, `examples/scenarios/gate_reject_demo*.csv`
 - Academic report: `PROJECT_REPORT.md`
 
 ## Hard Constraints (Do Not Break)
@@ -46,6 +47,7 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 6. Do not modify physics thresholds in `pi_lightgbm_backend.py` without domain justification.
 7. cVAE, SHAP, and LLM modules must remain independent — usable without each other.
 8. LLM explainer must always work without API key (template fallback).
+9. Model Internals visuals must remain explanatory/diagnostic UI only; do not move gating or prediction semantics into frontend visualization code.
 
 ## Model Swapping Contract
 
@@ -54,6 +56,7 @@ Aircraft engine RUL prediction system for NASA C-MAPSS FD001 with:
 - Keep API request/response contracts stable.
 - Preserve mode names (`Baseline`, `Physics-Informed`) and semantics.
 - The `pi-lightgbm` backend accepts only `Baseline` mode (physics applied post-prediction).
+- The Model Internals page may fall back to the `attention` backend for visualization if a selected artifact backend cannot produce a compatible detailed result.
 
 ## API Contracts
 
@@ -74,6 +77,30 @@ Any contract-breaking change must be versioned and documented.
 - Local no-TLS mode supported via `--insecure-no-tls`.
 - Node-RED publishes to `engine/rul` and `engine/sensors/all` topics.
 - Logs under `logs/` are operational artifacts.
+
+## Streamlit Visual Contracts
+
+- Navigation pages:
+  `Fleet Overview`, `Live Digital Twin`, `RUL Trajectories`, `Model Internals`, `Batch Inference`, `Settings`.
+- `Model Internals` includes:
+  - animated inference pipeline flow
+  - immersive clickable model core canvas
+  - engine cross-section sensor map
+  - Reliability Gate Simulator using `compute_reliability_index`, `gate_prediction`, and `reason_codes`
+- Keep Model Internals compatible with standard detailed inference output:
+  `raw_df`, `engine_ids`, `per_engine_mean_rul`, `per_engine_window_rul`,
+  `per_engine_last_attention`, `per_engine_reliability`.
+- Plotly shape compatibility note: use `path`, `circle`, `rect`, or `line`; do not use unsupported shape types such as `ellipse`.
+- Browser/canvas interactivity is allowed in Streamlit via `streamlit.components.v1.html`, but it should consume existing runtime output rather than duplicating model logic.
+
+## Demo Fixture Contracts
+
+- Gate demo CSVs under `examples/scenarios/` are verified against `Baseline` + `attention`.
+- Expected demo groups:
+  - `gate_accept_demo.csv`, `gate_accept_demo_2.csv`, `gate_accept_demo_3.csv`
+  - `gate_warn_demo.csv`, `gate_warn_demo_2.csv`, `gate_warn_demo_3.csv`
+  - `gate_reject_demo.csv`, `gate_reject_demo_2.csv`, `gate_reject_demo_3.csv`
+- Use these files for dashboard demos of `ACCEPT`, `WARN`, and `REJECT` behavior.
 
 ## Notebook Context
 
