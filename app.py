@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     import plotly.express as px
@@ -44,6 +45,13 @@ LIVE_STATE_FILE = Path("logs") / "live_state.json"
 LIVE_PREDICTIONS_FILE = Path("logs") / "mqtt_predictions.csv"
 NODERED_STATE_FILE = Path("logs") / "nodered_live_state.json"
 DECISION_COLORS = {"ACCEPT": "#10b981", "WARN": "#f59e0b", "REJECT": "#ef4444", "RAW": "#3b82f6"}
+SENSOR_GROUP_COLORS = {
+    "thermal": "#f97316",
+    "pressure": "#38bdf8",
+    "mechanical": "#a78bfa",
+    "flow": "#22c55e",
+    "other": "#94a3b8",
+}
 
 PLOTLY_TEMPLATE = "plotly_dark"
 DEFAULT_HOURS_PER_CYCLE = 1.0
@@ -152,6 +160,344 @@ def _make_plotly_dark(fig):
     return fig
 
 
+def _lookup_engine_map(mapping: dict, engine_id: int, default=None):
+    if not isinstance(mapping, dict):
+        return default
+    return mapping.get(engine_id, mapping.get(str(engine_id), default))
+
+
+def _build_model_core_payload(
+    result: dict,
+    engine_id: int,
+    *,
+    model_backend: str,
+    model_mode: str,
+    view_mode: str,
+) -> dict:
+    raw_df = result.get("raw_df", pd.DataFrame())
+    if isinstance(raw_df, list):
+        raw_df = pd.DataFrame(raw_df)
+
+    engine_df = pd.DataFrame()
+    if not raw_df.empty and "unit_nr" in raw_df.columns:
+        engine_df = raw_df[raw_df["unit_nr"].astype(int) == int(engine_id)].sort_values("time_cycles")
+
+    rel = _lookup_engine_map(result.get("per_engine_reliability", {}), engine_id, {})
+    pred_rul = float(_lookup_engine_map(result.get("per_engine_mean_rul", {}), engine_id, 0.0) or 0.0)
+    trusted_rul = float(rel.get("trusted_rul", pred_rul) or 0.0)
+    ri = float(rel.get("ri", 0.0) or 0.0)
+    decision = str(rel.get("decision", "RAW"))
+    attention = _lookup_engine_map(result.get("per_engine_last_attention", {}), engine_id, []) or []
+    windows = _lookup_engine_map(result.get("per_engine_window_rul", {}), engine_id, []) or []
+    physics = _lookup_engine_map(result.get("per_engine_physics", {}), engine_id, {})
+
+    shap_result = {"contributions": [], "anomalies": {}, "group_importance": {}, "analysis_mode": "unavailable"}
+    if not engine_df.empty:
+        try:
+            sensor_cols_for_window = [c for c in engine_df.columns if str(c).startswith("s_")]
+            sensor_window = engine_df[sensor_cols_for_window].values[-30:] if len(engine_df) >= 30 else None
+            shap_result = get_shap().explain(
+                sensor_df=engine_df,
+                attention_weights=attention if attention else None,
+                sensor_window=sensor_window,
+            )
+        except Exception:
+            shap_result = {"contributions": [], "anomalies": {}, "group_importance": {}, "analysis_mode": "fallback"}
+
+    contrib_by_sensor = {c["sensor_id"]: c for c in shap_result.get("contributions", [])}
+    sensor_cols = [c for c in RAW_COLUMN_NAMES if c.startswith("s_")]
+    latest = engine_df.iloc[-1].to_dict() if not engine_df.empty else {}
+    sensors = []
+    for idx, sensor in enumerate(sensor_cols):
+        contrib = contrib_by_sensor.get(sensor, {})
+        group = str(contrib.get("group", "other"))
+        value = float(latest.get(sensor, 0.0) or 0.0)
+        sensors.append(
+            {
+                "id": sensor,
+                "label": sensor.upper(),
+                "value": round(value, 3),
+                "group": group,
+                "color": SENSOR_GROUP_COLORS.get(group, SENSOR_GROUP_COLORS["other"]),
+                "contribution": float(contrib.get("contribution", 0.0) or 0.0),
+                "rank": int(contrib.get("rank", idx + 1) or idx + 1),
+                "anomaly": shap_result.get("anomalies", {}).get(sensor, ""),
+            }
+        )
+
+    trajectory = get_trajectory_gen().generate(
+        current_rul=pred_rul,
+        reliability_index=ri,
+        window_predictions=[float(v) for v in windows] if windows else [pred_rul],
+        n_trajectories=24,
+        trajectory_length=28,
+    )
+
+    return {
+        "engineId": int(engine_id),
+        "backend": model_backend,
+        "mode": model_mode,
+        "viewMode": view_mode,
+        "predictedRul": round(pred_rul, 3),
+        "trustedRul": round(trusted_rul, 3),
+        "ri": round(ri, 4),
+        "decision": decision,
+        "gateColor": DECISION_COLORS.get(decision, "#3b82f6"),
+        "reasonCodes": rel.get("reason_codes", []),
+        "windowStd": round(float(rel.get("window_std", 0.0) or 0.0), 4),
+        "physicsRisk": round(float(rel.get("physics_risk", physics.get("mean_physics_risk", 0.0)) or 0.0), 4),
+        "cpc": round(float(rel.get("cpc", physics.get("mean_cpc", rel.get("physics_score", 1.0))) or 1.0), 4),
+        "attention": [float(v) for v in attention],
+        "windows": [float(v) for v in windows],
+        "sensors": sensors,
+        "groupImportance": shap_result.get("group_importance", {}),
+        "shapMode": shap_result.get("analysis_mode", "unavailable"),
+        "trajectory": {
+            "mode": trajectory.get("generation_mode", "monte_carlo"),
+            "mean": trajectory.get("mean", []),
+            "ci95Lower": trajectory.get("ci_95_lower", []),
+            "ci95Upper": trajectory.get("ci_95_upper", []),
+        },
+        "cycle": int(latest.get("time_cycles", 0) or 0),
+    }
+
+
+def _render_model_core_component(payload: dict, height: int = 720) -> None:
+    data_json = json.dumps(payload)
+    html = f"""
+<div id="model-core-root">
+  <canvas id="model-core-canvas"></canvas>
+  <div class="hud top-left">
+    <div class="kicker">ENGINE U-{payload['engineId']:03d}</div>
+    <div class="title">Model Digital Core</div>
+    <div class="sub">{payload['backend']} · {payload['mode']} · {payload['viewMode']}</div>
+  </div>
+  <div class="hud top-right">
+    <div class="metric"><span>RUL</span><b>{payload['predictedRul']:.1f}</b></div>
+    <div class="metric"><span>Trusted</span><b>{payload['trustedRul']:.1f}</b></div>
+    <div class="metric"><span>RI</span><b>{payload['ri']:.2f}</b></div>
+    <div class="pill" style="border-color:{payload['gateColor']};color:{payload['gateColor']}">{payload['decision']}</div>
+  </div>
+  <div class="hud bottom-left">
+    <div class="legend"><i style="background:#f97316"></i> Thermal</div>
+    <div class="legend"><i style="background:#38bdf8"></i> Pressure</div>
+    <div class="legend"><i style="background:#a78bfa"></i> Mechanical</div>
+    <div class="legend"><i style="background:#22c55e"></i> Flow</div>
+  </div>
+  <div class="hud bottom-right">
+    <div>CPC {payload['cpc']:.2f} · physics risk {payload['physicsRisk']:.2f}</div>
+    <div>Trajectory: {payload['trajectory']['mode']} · SHAP: {payload['shapMode']}</div>
+  </div>
+</div>
+<script>
+const DATA = {data_json};
+const root = document.getElementById("model-core-root");
+const canvas = document.getElementById("model-core-canvas");
+const ctx = canvas.getContext("2d");
+let w = 0, h = 0, dpr = window.devicePixelRatio || 1;
+let pointer = {{x: 0, y: 0}};
+function resize() {{
+  const rect = root.getBoundingClientRect();
+  w = rect.width; h = rect.height;
+  canvas.width = Math.floor(w * dpr);
+  canvas.height = Math.floor(h * dpr);
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}}
+window.addEventListener("resize", resize);
+root.addEventListener("pointermove", (e) => {{
+  const r = root.getBoundingClientRect();
+  pointer.x = (e.clientX - r.left - w / 2) / w;
+  pointer.y = (e.clientY - r.top - h / 2) / h;
+}});
+resize();
+
+function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
+function hexToRgb(hex) {{
+  const clean = hex.replace("#", "");
+  const num = parseInt(clean, 16);
+  return {{r:(num>>16)&255, g:(num>>8)&255, b:num&255}};
+}}
+function glowCircle(x, y, r, color, alpha=1) {{
+  const c = hexToRgb(color);
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3.2);
+  g.addColorStop(0, `rgba(${{c.r}},${{c.g}},${{c.b}},${{alpha}})`);
+  g.addColorStop(0.45, `rgba(${{c.r}},${{c.g}},${{c.b}},${{alpha * 0.22}})`);
+  g.addColorStop(1, `rgba(${{c.r}},${{c.g}},${{c.b}},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 3.2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+}}
+function drawRing(cx, cy, rx, ry, color, alpha, width=1.2) {{
+  ctx.save();
+  ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = width;
+  ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}}
+function drawLabel(text, x, y, color = "#dbeafe", align = "center") {{
+  ctx.save(); ctx.fillStyle = color; ctx.font = "12px Inter, Segoe UI, sans-serif"; ctx.textAlign = align;
+  ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 8; ctx.fillText(text, x, y); ctx.restore();
+}}
+function nodePosition(i, count, t, cx, cy, rx, ry, tilt) {{
+  const angle = (Math.PI * 2 * i / count) + t * (0.18 + (i % 4) * 0.015);
+  const depth = Math.sin(angle + tilt);
+  return {{
+    x: cx + Math.cos(angle) * rx + pointer.x * depth * 38,
+    y: cy + Math.sin(angle + tilt) * ry + pointer.y * depth * 28,
+    depth
+  }};
+}}
+function drawTrajectory(cx, cy, t) {{
+  const mean = DATA.trajectory.mean || [];
+  const lo = DATA.trajectory.ci95Lower || [];
+  const hi = DATA.trajectory.ci95Upper || [];
+  if (mean.length < 2) return;
+  const startX = cx + 170, startY = cy + 24, width = Math.min(280, w * 0.28), scaleY = 1.55;
+  ctx.save(); ctx.lineWidth = 1; ctx.globalAlpha = DATA.viewMode === "Trajectory View" ? 0.9 : 0.42;
+  ctx.strokeStyle = "rgba(96,165,250,.24)";
+  for (let band of [lo, hi]) {{
+    ctx.beginPath();
+    band.forEach((v, i) => {{
+      const x = startX + i / (band.length - 1) * width;
+      const y = startY + (125 - v) * scaleY;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }});
+    ctx.stroke();
+  }}
+  ctx.strokeStyle = "#06b6d4"; ctx.lineWidth = 2.4; ctx.globalAlpha = 0.9;
+  ctx.beginPath();
+  mean.forEach((v, i) => {{
+    const x = startX + i / (mean.length - 1) * width;
+    const y = startY + (125 - v) * scaleY + Math.sin(t * 1.8 + i * .4) * 2;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }});
+  ctx.stroke();
+  drawLabel("future RUL fan", startX + width * .58, startY - 12, "#93c5fd");
+  ctx.restore();
+}}
+function draw(tMs) {{
+  const t = tMs / 1000;
+  ctx.clearRect(0, 0, w, h);
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, "#020617"); bg.addColorStop(.45, "#08111f"); bg.addColorStop(1, "#111827");
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+  const cx = w * .5 + pointer.x * 18, cy = h * .5 + pointer.y * 12;
+  const base = Math.min(w, h);
+  const rxOuter = base * .36, ryOuter = base * .18;
+  const rxMid = base * .27, ryMid = base * .125;
+  const rxCore = base * .16, ryCore = base * .075;
+  drawRing(cx, cy, rxOuter, ryOuter, "rgba(148,163,184,.55)", .75, 1.2);
+  drawRing(cx, cy, rxOuter * .88, ryOuter * 1.32, "rgba(56,189,248,.34)", .7, 1);
+  drawRing(cx, cy, rxMid, ryMid, "rgba(139,92,246,.48)", .9, 2);
+  drawRing(cx, cy, rxCore, ryCore, DATA.gateColor, .9, 3.5);
+  drawLabel("sensor shell", cx - rxOuter - 18, cy - ryOuter - 18, "#94a3b8", "left");
+  drawLabel("30-cycle window", cx - rxMid, cy + ryMid + 28, "#c4b5fd", "left");
+  drawLabel("RI gate", cx + rxCore - 30, cy - ryCore - 20, DATA.gateColor, "left");
+
+  const sensors = DATA.sensors || [];
+  const activeSensors = sensors.filter(s => s.rank <= 14).sort((a,b) => a.rank - b.rank);
+  activeSensors.forEach((s, i) => {{
+    const p = nodePosition(i, activeSensors.length, t, cx, cy, rxOuter, ryOuter, i % 2 ? .2 : -.34);
+    const risk = clamp(Math.abs(s.contribution || 0), 0, 1);
+    const size = 5.5 + risk * 7 + (s.anomaly ? 5 : 0);
+    ctx.globalAlpha = p.depth < -0.55 ? .42 : .95;
+    if (DATA.viewMode === "Attention View" || DATA.viewMode === "Architecture View") {{
+      ctx.strokeStyle = `rgba(148,163,184,${{0.08 + risk * 0.22}})`;
+      ctx.lineWidth = 1 + risk * 2;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.quadraticCurveTo(cx, cy - 30, cx, cy); ctx.stroke();
+    }}
+    glowCircle(p.x, p.y, size, s.anomaly ? "#ef4444" : s.color, .95);
+    if (risk > .62 || s.anomaly || i < 4) drawLabel(s.id, p.x, p.y - size - 8, "#e2e8f0");
+    ctx.globalAlpha = 1;
+  }});
+
+  const attn = DATA.attention || [];
+  if (attn.length) {{
+    const maxA = Math.max(...attn, .001);
+    attn.forEach((v, i) => {{
+      const a0 = -Math.PI * .95 + i / attn.length * Math.PI * 1.9;
+      const a1 = -Math.PI * .95 + (i + .72) / attn.length * Math.PI * 1.9;
+      ctx.strokeStyle = `rgba(245,158,11,${{DATA.viewMode === "Attention View" ? .18 + (v/maxA) * .78 : .10 + (v/maxA) * .28}})`;
+      ctx.lineWidth = 2 + (v / maxA) * 7;
+      ctx.beginPath(); ctx.ellipse(cx, cy, rxMid + 8, ryMid + 18, 0, a0 + t * .07, a1 + t * .07); ctx.stroke();
+    }});
+  }}
+
+  for (let i = 0; i < 42; i++) {{
+    const phase = (t * .34 + i / 42) % 1;
+    const x = cx - rxOuter + phase * rxOuter * 2;
+    const y = cy + Math.sin(phase * Math.PI * 2 + i) * ryOuter * .48;
+    const alpha = .12 + Math.sin(phase * Math.PI) * .38;
+    glowCircle(x, y, 1.4 + (i % 3), "#60a5fa", alpha);
+  }}
+
+  const coreGrad = ctx.createRadialGradient(cx - 25, cy - 25, 2, cx, cy, base * .16);
+  coreGrad.addColorStop(0, "rgba(255,255,255,.92)");
+  coreGrad.addColorStop(.18, "rgba(125,211,252,.9)");
+  coreGrad.addColorStop(.55, "rgba(59,130,246,.44)");
+  coreGrad.addColorStop(1, "rgba(15,23,42,.12)");
+  ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, base * .085, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = DATA.gateColor; ctx.lineWidth = 2.5; ctx.beginPath();
+  ctx.arc(cx, cy, base * .098, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(DATA.ri, 0, 1)); ctx.stroke();
+  drawLabel(DATA.backend.toUpperCase(), cx, cy - 5, "#f8fafc");
+  drawLabel(`RUL ${{DATA.predictedRul.toFixed(1)}}`, cx, cy + 14, "#bae6fd");
+
+  if (DATA.viewMode === "Physics View") {{
+    const pulse = .5 + Math.sin(t * 3) * .5;
+    ctx.strokeStyle = `rgba(239,68,68,${{.18 + DATA.physicsRisk * .62 + pulse * .12}})`;
+    ctx.lineWidth = 8 + DATA.physicsRisk * 16;
+    ctx.beginPath(); ctx.arc(cx, cy, base * (.13 + DATA.physicsRisk * .1), 0, Math.PI * 2); ctx.stroke();
+  }}
+  drawTrajectory(cx, cy, t);
+  requestAnimationFrame(draw);
+}}
+requestAnimationFrame(draw);
+</script>
+<style>
+#model-core-root {{
+  position: relative;
+  height: {height}px;
+  overflow: hidden;
+  border: 1px solid rgba(148,163,184,.22);
+  border-radius: 18px;
+  background: #020617;
+  font-family: Inter, Segoe UI, sans-serif;
+  color: #e5e7eb;
+  box-shadow: inset 0 0 80px rgba(14,165,233,.08), 0 24px 80px rgba(0,0,0,.25);
+}}
+#model-core-canvas {{ position: absolute; inset: 0; }}
+.hud {{
+  position: absolute;
+  padding: 12px 14px;
+  border: 1px solid rgba(148,163,184,.18);
+  background: rgba(2,6,23,.54);
+  backdrop-filter: blur(14px);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.24);
+}}
+.top-left {{ top: 16px; left: 16px; }}
+.top-right {{ top: 16px; right: 16px; display: grid; grid-template-columns: repeat(2, minmax(72px, 1fr)); gap: 8px; }}
+.bottom-left {{ bottom: 16px; left: 16px; display: grid; gap: 6px; }}
+.bottom-right {{ bottom: 16px; right: 16px; color: #cbd5e1; font-size: 12px; line-height: 1.5; text-align: right; }}
+.kicker {{ color: #38bdf8; font-size: 11px; letter-spacing: .08em; font-weight: 800; }}
+.title {{ font-size: 22px; font-weight: 800; margin-top: 2px; }}
+.sub {{ color: #cbd5e1; font-size: 12px; margin-top: 3px; }}
+.metric {{ min-width: 74px; }}
+.metric span {{ display:block; color:#94a3b8; font-size:11px; }}
+.metric b {{ display:block; color:#f8fafc; font-size:18px; }}
+.pill {{ grid-column: 1 / -1; border: 1px solid; border-radius: 999px; padding: 6px 10px; text-align:center; font-size: 12px; font-weight: 800; }}
+.legend {{ color:#cbd5e1; font-size: 12px; }}
+.legend i {{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; box-shadow:0 0 12px currentColor; }}
+@media (max-width: 760px) {{
+  #model-core-root {{ height: 620px; border-radius: 12px; }}
+  .top-right {{ left: 16px; right: auto; top: 112px; }}
+  .bottom-right {{ left: 16px; right: 16px; text-align: left; }}
+}}
+</style>
+"""
+    components.html(html, height=height + 8, scrolling=False)
+
+
 # ═══════════════════════════════════════════════════════════════
 # Sidebar
 # ═══════════════════════════════════════════════════════════════
@@ -163,7 +509,14 @@ with st.sidebar:
     st.markdown("### Monitor")
     page = st.radio(
         "Navigation",
-        ["🏠 Fleet Overview", "📡 Live Digital Twin", "📈 RUL Trajectories", "🔬 Batch Inference", "⚙️ Settings"],
+        [
+            "🏠 Fleet Overview",
+            "📡 Live Digital Twin",
+            "📈 RUL Trajectories",
+            "🧬 Model Internals",
+            "🔬 Batch Inference",
+            "⚙️ Settings",
+        ],
         label_visibility="collapsed",
     )
 
@@ -630,6 +983,113 @@ elif page == "📈 RUL Trajectories":
             p = scenario_dir / fname
             if p.exists():
                 st.download_button(f"📥 {label}", data=p.read_bytes(), file_name=fname, mime="text/csv", key=f"dl_{fname}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Page: Model Internals
+# ═══════════════════════════════════════════════════════════════
+elif page == "🧬 Model Internals":
+    st.markdown('<p class="section-header">Model Internals — Spatial Digital Core</p>', unsafe_allow_html=True)
+
+    intro_l, intro_r = st.columns([1.5, 1])
+    with intro_l:
+        st.markdown(
+            """
+            This view turns one engine prediction into an interactive systems map:
+            sensor nodes orbit the model core, attention arcs show recent timestep focus,
+            the Reliability Index becomes the gate ring, and the future RUL fan projects outward.
+            """
+        )
+    with intro_r:
+        st.info("Use a C-MAPSS CSV with at least 30 cycles per selected engine. The visualization uses the same inference result shape as the rest of the dashboard.")
+
+    source_mode = st.radio(
+        "Source",
+        ["Upload CSV", "Use Fleet Overview result", "Use demo sample"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    internals_bytes = None
+    internals_name = ""
+    if source_mode == "Upload CSV":
+        internals_file = st.file_uploader("Upload sensor CSV", type=["csv", "txt"], key="internals_upload")
+        if internals_file:
+            internals_bytes = internals_file.getvalue()
+            internals_name = internals_file.name
+    elif source_mode == "Use Fleet Overview result":
+        internals_bytes = st.session_state.get("fleet_bytes")
+        internals_name = str(st.session_state.get("fleet_sig", ["fleet_result"])[0]) if internals_bytes else ""
+        if not internals_bytes:
+            st.warning("Run Fleet Overview inference first, or choose another source.")
+    else:
+        sample_path = Path("examples") / "sample_cmapss_engine_dual.csv"
+        if sample_path.exists():
+            internals_bytes = sample_path.read_bytes()
+            internals_name = str(sample_path)
+        else:
+            st.error("Demo sample not found.")
+
+    vc1, vc2, vc3 = st.columns([1, 1, 1])
+    view_mode = vc1.selectbox(
+        "Visual Mode",
+        ["Architecture View", "Attention View", "Physics View", "Trajectory View"],
+        index=0,
+        help="Changes which internal layer is emphasized in the spatial scene.",
+    )
+    visual_height = int(vc2.slider("Viewport Height", 560, 860, 720, 20))
+    render_now = vc3.button("Render Digital Core", type="primary", disabled=internals_bytes is None)
+
+    if internals_bytes is not None:
+        sig = (internals_name, len(internals_bytes), model_mode, selected_backend)
+        if render_now or st.session_state.get("internals_sig") != sig:
+            with st.spinner("Building model internals view..."):
+                try:
+                    baseline_only_backend = selected_backend in {"artifact", "pi-lightgbm"}
+                    effective_mode = "Baseline" if model_mode == COMPARE_MODE or baseline_only_backend else model_mode
+                    st.session_state["internals_result"] = service.infer(
+                        internals_bytes,
+                        model_mode=effective_mode,
+                        model_backend=selected_backend,
+                    )
+                    st.session_state["internals_sig"] = sig
+                    st.session_state["internals_mode"] = effective_mode
+                    st.session_state["internals_backend"] = selected_backend
+                except Exception as exc:
+                    st.error(f"Could not build internals view: {exc}")
+
+    if "internals_result" in st.session_state:
+        internals_result = st.session_state["internals_result"]
+        engine_ids = internals_result.get("engine_ids", [])
+        if engine_ids:
+            ec1, ec2, ec3, ec4 = st.columns(4)
+            selected_engine = ec1.selectbox("Engine", engine_ids, format_func=lambda x: f"U-{int(x):03d}", key="internals_engine")
+            rel = _lookup_engine_map(internals_result.get("per_engine_reliability", {}), int(selected_engine), {})
+            pred = float(_lookup_engine_map(internals_result.get("per_engine_mean_rul", {}), int(selected_engine), 0.0) or 0.0)
+            ec2.metric("Predicted RUL", f"{pred:.1f}")
+            ec3.metric("Reliability Index", f"{float(rel.get('ri', 0.0)):.2f}")
+            ec4.markdown(f"**Gate**<br>{_decision_badge(str(rel.get('decision', 'RAW')))}", unsafe_allow_html=True)
+
+            payload = _build_model_core_payload(
+                internals_result,
+                int(selected_engine),
+                model_backend=st.session_state.get("internals_backend", selected_backend),
+                model_mode=st.session_state.get("internals_mode", model_mode),
+                view_mode=view_mode,
+            )
+            _render_model_core_component(payload, height=visual_height)
+
+            with st.expander("What The Layers Mean"):
+                st.markdown(
+                    """
+                    - **Sensor shell:** active C-MAPSS sensors grouped by thermal, pressure, mechanical, and flow behavior.
+                    - **Data flow particles:** normalized sensor windows moving toward inference.
+                    - **Attention arcs:** recent 30-cycle timestep focus from the attention backend when available.
+                    - **Model core:** selected backend and current RUL estimate.
+                    - **Gate ring:** post-prediction Reliability Index, colored by `ACCEPT`, `WARN`, or `REJECT`.
+                    - **Future fan:** probabilistic RUL trajectory generated by the cVAE/Monte Carlo trajectory module.
+                    """
+                )
 
 
 # ═══════════════════════════════════════════════════════════════
