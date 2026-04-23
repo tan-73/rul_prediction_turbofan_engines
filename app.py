@@ -262,7 +262,7 @@ def _build_model_core_payload(
     }
 
 
-def _render_model_core_component(payload: dict, height: int = 720) -> None:
+def _render_model_core_component(payload: dict, height: int = 900) -> None:
     data_json = json.dumps(payload)
     html = f"""
 <div id="model-core-root">
@@ -284,9 +284,15 @@ def _render_model_core_component(payload: dict, height: int = 720) -> None:
     <div class="legend"><i style="background:#a78bfa"></i> Mechanical</div>
     <div class="legend"><i style="background:#22c55e"></i> Flow</div>
   </div>
-  <div class="hud bottom-right">
-    <div>CPC {payload['cpc']:.2f} · physics risk {payload['physicsRisk']:.2f}</div>
-    <div>Trajectory: {payload['trajectory']['mode']} · SHAP: {payload['shapMode']}</div>
+  <div class="hud detail-card" id="detail-card">
+    <div class="detail-kicker">Hover or click an element</div>
+    <div class="detail-title" id="detail-title">Model Core</div>
+    <div class="detail-body" id="detail-body">Sensor nodes, model layers, RI gate, and future RUL trajectory are interactive.</div>
+  </div>
+  <div class="hud controls">
+    <button id="zoom-in" type="button">+</button>
+    <button id="zoom-out" type="button">-</button>
+    <button id="reset-view" type="button">Reset</button>
   </div>
 </div>
 <script>
@@ -294,8 +300,15 @@ const DATA = {data_json};
 const root = document.getElementById("model-core-root");
 const canvas = document.getElementById("model-core-canvas");
 const ctx = canvas.getContext("2d");
+const titleEl = document.getElementById("detail-title");
+const bodyEl = document.getElementById("detail-body");
 let w = 0, h = 0, dpr = window.devicePixelRatio || 1;
-let pointer = {{x: 0, y: 0}};
+let pointer = {{x: 0, y: 0, rawX: 0, rawY: 0, inside: false}};
+let selected = null;
+let hover = null;
+let paused = false;
+let zoom = 1.18;
+let hitTargets = [];
 function resize() {{
   const rect = root.getBoundingClientRect();
   w = rect.width; h = rect.height;
@@ -308,16 +321,101 @@ function resize() {{
 window.addEventListener("resize", resize);
 root.addEventListener("pointermove", (e) => {{
   const r = root.getBoundingClientRect();
-  pointer.x = (e.clientX - r.left - w / 2) / w;
-  pointer.y = (e.clientY - r.top - h / 2) / h;
+  pointer.rawX = e.clientX - r.left;
+  pointer.rawY = e.clientY - r.top;
+  pointer.x = (pointer.rawX - w / 2) / w;
+  pointer.y = (pointer.rawY - h / 2) / h;
+  pointer.inside = true;
+  hover = hitTest(pointer.rawX, pointer.rawY);
+  root.style.cursor = hover ? "pointer" : "default";
+  updateDetail(hover || selected);
 }});
+root.addEventListener("pointerleave", () => {{ pointer.inside = false; hover = null; root.style.cursor = "default"; updateDetail(selected); }});
+root.addEventListener("click", () => {{
+  selected = hover || selected;
+  updateDetail(selected);
+}});
+root.addEventListener("dblclick", () => {{ selected = null; updateDetail(null); }});
+root.addEventListener("wheel", (e) => {{
+  e.preventDefault();
+  zoom = clamp(zoom + (e.deltaY < 0 ? 0.08 : -0.08), 0.78, 1.72);
+}}, {{passive:false}});
+document.getElementById("zoom-in").addEventListener("click", () => zoom = clamp(zoom + 0.12, 0.78, 1.72));
+document.getElementById("zoom-out").addEventListener("click", () => zoom = clamp(zoom - 0.12, 0.78, 1.72));
+document.getElementById("reset-view").addEventListener("click", () => {{ zoom = 1.18; selected = null; updateDetail(null); }});
 resize();
 
 function clamp(v, lo, hi) {{ return Math.max(lo, Math.min(hi, v)); }}
+function fmt(v, digits=3) {{
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(digits) : String(v ?? "-");
+}}
 function hexToRgb(hex) {{
   const clean = hex.replace("#", "");
   const num = parseInt(clean, 16);
   return {{r:(num>>16)&255, g:(num>>8)&255, b:num&255}};
+}}
+function describeTarget(target) {{
+  if (!target) {{
+    return {{
+      title: "Model Core",
+      body: `Backend ${{DATA.backend}} in ${{DATA.mode}} mode. RUL ${{fmt(DATA.predictedRul, 1)}}, trusted RUL ${{fmt(DATA.trustedRul, 1)}}, RI ${{fmt(DATA.ri, 2)}}.`
+    }};
+  }}
+  if (target.kind === "sensor") {{
+    const s = target.data;
+    return {{
+      title: `${{s.id.toUpperCase()}} · ${{s.group}} sensor`,
+      body: `Latest value ${{fmt(s.value, 3)}}. SHAP-style contribution ${{fmt(s.contribution, 3)}}. Rank ${{s.rank}}. ${{s.anomaly ? "Anomaly: " + s.anomaly + "." : "No anomaly flag."}}`
+    }};
+  }}
+  if (target.kind === "core") {{
+    return {{
+      title: "Inference Core",
+      body: `${{DATA.backend}} produced raw RUL ${{fmt(DATA.predictedRul, 1)}} cycles. This value remains separate from post-prediction gating.`
+    }};
+  }}
+  if (target.kind === "gate") {{
+    return {{
+      title: "Reliability Gate",
+      body: `Decision ${{DATA.decision}} with RI ${{fmt(DATA.ri, 3)}}. Trusted RUL ${{fmt(DATA.trustedRul, 1)}}. Reason codes: ${{(DATA.reasonCodes || []).join(", ") || "CONSISTENT"}}.`
+    }};
+  }}
+  if (target.kind === "window") {{
+    return {{
+      title: "30-Cycle Window",
+      body: `Window predictions: ${{(DATA.windows || []).map(v => fmt(v, 1)).join(", ") || "unavailable"}}. Window std ${{fmt(DATA.windowStd, 3)}}.`
+    }};
+  }}
+  if (target.kind === "trajectory") {{
+    return {{
+      title: "Future RUL Trajectory",
+      body: `${{DATA.trajectory.mode}} fan generated from current RUL and reliability. The line shows expected future degradation across upcoming cycles.`
+    }};
+  }}
+  if (target.kind === "physics") {{
+    return {{
+      title: "Physics Consistency Field",
+      body: `CPC ${{fmt(DATA.cpc, 2)}} and physics risk ${{fmt(DATA.physicsRisk, 2)}}. This layer is emphasized for physics-informed backends.`
+    }};
+  }}
+  return {{title: target.label || "Element", body: "Interactive model element."}};
+}}
+function updateDetail(target) {{
+  const d = describeTarget(target);
+  titleEl.textContent = d.title;
+  bodyEl.textContent = d.body;
+}}
+function registerHit(kind, x, y, r, data=null, label="") {{
+  hitTargets.push({{kind, x, y, r, data, label}});
+}}
+function hitTest(x, y) {{
+  for (let i = hitTargets.length - 1; i >= 0; i--) {{
+    const t = hitTargets[i];
+    const dx = x - t.x, dy = y - t.y;
+    if (dx * dx + dy * dy <= t.r * t.r) return t;
+  }}
+  return null;
 }}
 function glowCircle(x, y, r, color, alpha=1) {{
   const c = hexToRgb(color);
@@ -334,16 +432,16 @@ function drawRing(cx, cy, rx, ry, color, alpha, width=1.2) {{
   ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }}
-function drawLabel(text, x, y, color = "#dbeafe", align = "center") {{
-  ctx.save(); ctx.fillStyle = color; ctx.font = "12px Inter, Segoe UI, sans-serif"; ctx.textAlign = align;
+function drawLabel(text, x, y, color = "#dbeafe", align = "center", size = 13) {{
+  ctx.save(); ctx.fillStyle = color; ctx.font = `${{size}}px Inter, Segoe UI, sans-serif`; ctx.textAlign = align;
   ctx.shadowColor = "rgba(0,0,0,.8)"; ctx.shadowBlur = 8; ctx.fillText(text, x, y); ctx.restore();
 }}
 function nodePosition(i, count, t, cx, cy, rx, ry, tilt) {{
-  const angle = (Math.PI * 2 * i / count) + t * (0.18 + (i % 4) * 0.015);
+  const angle = (Math.PI * 2 * i / count) + t * (0.095 + (i % 4) * 0.012);
   const depth = Math.sin(angle + tilt);
   return {{
-    x: cx + Math.cos(angle) * rx + pointer.x * depth * 38,
-    y: cy + Math.sin(angle + tilt) * ry + pointer.y * depth * 28,
+    x: cx + Math.cos(angle) * rx + pointer.x * depth * 56,
+    y: cy + Math.sin(angle + tilt) * ry + pointer.y * depth * 42,
     depth
   }};
 }}
@@ -352,7 +450,8 @@ function drawTrajectory(cx, cy, t) {{
   const lo = DATA.trajectory.ci95Lower || [];
   const hi = DATA.trajectory.ci95Upper || [];
   if (mean.length < 2) return;
-  const startX = cx + 170, startY = cy + 24, width = Math.min(280, w * 0.28), scaleY = 1.55;
+  const startX = Math.min(w - 420, cx + 235 * zoom), startY = cy - 120 * zoom, width = Math.min(420, w * 0.34), scaleY = 2.15 * zoom;
+  registerHit("trajectory", startX + width * .5, startY + 120, Math.max(90, width * .38));
   ctx.save(); ctx.lineWidth = 1; ctx.globalAlpha = DATA.viewMode === "Trajectory View" ? 0.9 : 0.42;
   ctx.strokeStyle = "rgba(96,165,250,.24)";
   for (let band of [lo, hi]) {{
@@ -372,42 +471,52 @@ function drawTrajectory(cx, cy, t) {{
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }});
   ctx.stroke();
-  drawLabel("future RUL fan", startX + width * .58, startY - 12, "#93c5fd");
+  drawLabel("future RUL fan", startX + width * .52, startY - 18, "#93c5fd", "center", 14);
   ctx.restore();
 }}
 function draw(tMs) {{
   const t = tMs / 1000;
+  hitTargets = [];
   ctx.clearRect(0, 0, w, h);
   const bg = ctx.createLinearGradient(0, 0, w, h);
   bg.addColorStop(0, "#020617"); bg.addColorStop(.45, "#08111f"); bg.addColorStop(1, "#111827");
   ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-  const cx = w * .5 + pointer.x * 18, cy = h * .5 + pointer.y * 12;
+  const cx = w * .46 + pointer.x * 26, cy = h * .52 + pointer.y * 18;
   const base = Math.min(w, h);
-  const rxOuter = base * .36, ryOuter = base * .18;
-  const rxMid = base * .27, ryMid = base * .125;
-  const rxCore = base * .16, ryCore = base * .075;
+  const scene = base * zoom;
+  const rxOuter = scene * .43, ryOuter = scene * .22;
+  const rxMid = scene * .31, ryMid = scene * .142;
+  const rxCore = scene * .18, ryCore = scene * .085;
+  registerHit("gate", cx, cy, rxCore * 1.14);
+  registerHit("window", cx, cy + ryMid * .75, rxMid * .72);
+  registerHit("physics", cx, cy, rxCore * 1.62);
   drawRing(cx, cy, rxOuter, ryOuter, "rgba(148,163,184,.55)", .75, 1.2);
   drawRing(cx, cy, rxOuter * .88, ryOuter * 1.32, "rgba(56,189,248,.34)", .7, 1);
-  drawRing(cx, cy, rxMid, ryMid, "rgba(139,92,246,.48)", .9, 2);
-  drawRing(cx, cy, rxCore, ryCore, DATA.gateColor, .9, 3.5);
-  drawLabel("sensor shell", cx - rxOuter - 18, cy - ryOuter - 18, "#94a3b8", "left");
-  drawLabel("30-cycle window", cx - rxMid, cy + ryMid + 28, "#c4b5fd", "left");
-  drawLabel("RI gate", cx + rxCore - 30, cy - ryCore - 20, DATA.gateColor, "left");
+  drawRing(cx, cy, rxMid, ryMid, "rgba(139,92,246,.54)", .9, 2.5);
+  drawRing(cx, cy, rxCore, ryCore, DATA.gateColor, .9, 4.5);
+  drawLabel("sensor shell", cx - rxOuter - 30, cy - ryOuter - 26, "#94a3b8", "left", 15);
+  drawLabel("30-cycle window", cx - rxMid, cy + ryMid + 38, "#c4b5fd", "left", 15);
+  drawLabel("RI gate", cx + rxCore - 24, cy - ryCore - 28, DATA.gateColor, "left", 15);
 
   const sensors = DATA.sensors || [];
-  const activeSensors = sensors.filter(s => s.rank <= 14).sort((a,b) => a.rank - b.rank);
+  const activeSensors = sensors.slice().sort((a,b) => a.rank - b.rank);
   activeSensors.forEach((s, i) => {{
     const p = nodePosition(i, activeSensors.length, t, cx, cy, rxOuter, ryOuter, i % 2 ? .2 : -.34);
     const risk = clamp(Math.abs(s.contribution || 0), 0, 1);
-    const size = 5.5 + risk * 7 + (s.anomaly ? 5 : 0);
+    const isActive = (selected && selected.kind === "sensor" && selected.data.id === s.id) || (hover && hover.kind === "sensor" && hover.data.id === s.id);
+    const size = 7.5 + risk * 9 + (s.anomaly ? 5 : 0) + (isActive ? 5 : 0);
     ctx.globalAlpha = p.depth < -0.55 ? .42 : .95;
     if (DATA.viewMode === "Attention View" || DATA.viewMode === "Architecture View") {{
       ctx.strokeStyle = `rgba(148,163,184,${{0.08 + risk * 0.22}})`;
       ctx.lineWidth = 1 + risk * 2;
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.quadraticCurveTo(cx, cy - 30, cx, cy); ctx.stroke();
     }}
+    if (isActive) {{
+      ctx.strokeStyle = "#f8fafc"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(p.x, p.y, size + 8, 0, Math.PI * 2); ctx.stroke();
+    }}
     glowCircle(p.x, p.y, size, s.anomaly ? "#ef4444" : s.color, .95);
-    if (risk > .62 || s.anomaly || i < 4) drawLabel(s.id, p.x, p.y - size - 8, "#e2e8f0");
+    registerHit("sensor", p.x, p.y, Math.max(18, size + 12), s);
+    if (risk > .45 || s.anomaly || isActive || i < 8) drawLabel(s.id, p.x, p.y - size - 10, "#e2e8f0", "center", isActive ? 15 : 12);
     ctx.globalAlpha = 1;
   }});
 
@@ -431,26 +540,29 @@ function draw(tMs) {{
     glowCircle(x, y, 1.4 + (i % 3), "#60a5fa", alpha);
   }}
 
-  const coreGrad = ctx.createRadialGradient(cx - 25, cy - 25, 2, cx, cy, base * .16);
+  const coreRadius = scene * .105;
+  registerHit("core", cx, cy, coreRadius + 20);
+  const coreGrad = ctx.createRadialGradient(cx - 25, cy - 25, 2, cx, cy, scene * .18);
   coreGrad.addColorStop(0, "rgba(255,255,255,.92)");
   coreGrad.addColorStop(.18, "rgba(125,211,252,.9)");
   coreGrad.addColorStop(.55, "rgba(59,130,246,.44)");
   coreGrad.addColorStop(1, "rgba(15,23,42,.12)");
-  ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, base * .085, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, coreRadius, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = DATA.gateColor; ctx.lineWidth = 2.5; ctx.beginPath();
-  ctx.arc(cx, cy, base * .098, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(DATA.ri, 0, 1)); ctx.stroke();
-  drawLabel(DATA.backend.toUpperCase(), cx, cy - 5, "#f8fafc");
-  drawLabel(`RUL ${{DATA.predictedRul.toFixed(1)}}`, cx, cy + 14, "#bae6fd");
+  ctx.arc(cx, cy, coreRadius + 17, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(DATA.ri, 0, 1)); ctx.stroke();
+  drawLabel(DATA.backend.toUpperCase(), cx, cy - 8, "#f8fafc", "center", 18);
+  drawLabel(`RUL ${{DATA.predictedRul.toFixed(1)}}`, cx, cy + 18, "#bae6fd", "center", 16);
 
   if (DATA.viewMode === "Physics View") {{
     const pulse = .5 + Math.sin(t * 3) * .5;
     ctx.strokeStyle = `rgba(239,68,68,${{.18 + DATA.physicsRisk * .62 + pulse * .12}})`;
     ctx.lineWidth = 8 + DATA.physicsRisk * 16;
-    ctx.beginPath(); ctx.arc(cx, cy, base * (.13 + DATA.physicsRisk * .1), 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, scene * (.15 + DATA.physicsRisk * .12), 0, Math.PI * 2); ctx.stroke();
   }}
   drawTrajectory(cx, cy, t);
-  requestAnimationFrame(draw);
+  if (!paused) requestAnimationFrame(draw);
 }}
+updateDetail(null);
 requestAnimationFrame(draw);
 </script>
 <style>
@@ -464,6 +576,7 @@ requestAnimationFrame(draw);
   font-family: Inter, Segoe UI, sans-serif;
   color: #e5e7eb;
   box-shadow: inset 0 0 80px rgba(14,165,233,.08), 0 24px 80px rgba(0,0,0,.25);
+  min-height: 760px;
 }}
 #model-core-canvas {{ position: absolute; inset: 0; }}
 .hud {{
@@ -478,7 +591,16 @@ requestAnimationFrame(draw);
 .top-left {{ top: 16px; left: 16px; }}
 .top-right {{ top: 16px; right: 16px; display: grid; grid-template-columns: repeat(2, minmax(72px, 1fr)); gap: 8px; }}
 .bottom-left {{ bottom: 16px; left: 16px; display: grid; gap: 6px; }}
-.bottom-right {{ bottom: 16px; right: 16px; color: #cbd5e1; font-size: 12px; line-height: 1.5; text-align: right; }}
+.detail-card {{ right: 16px; bottom: 16px; width: min(360px, calc(100% - 32px)); color: #cbd5e1; }}
+.detail-kicker {{ color:#38bdf8; font-size:10px; letter-spacing:.08em; text-transform:uppercase; font-weight:800; }}
+.detail-title {{ color:#f8fafc; font-size:18px; font-weight:800; margin-top:4px; }}
+.detail-body {{ font-size:13px; line-height:1.45; margin-top:7px; }}
+.controls {{ left: 50%; bottom: 16px; transform: translateX(-50%); display:flex; gap:8px; padding:8px; }}
+.controls button {{
+  appearance:none; border:1px solid rgba(148,163,184,.25); background:rgba(15,23,42,.72); color:#e2e8f0;
+  border-radius:10px; min-width:38px; height:34px; padding:0 12px; font-weight:800; cursor:pointer;
+}}
+.controls button:hover {{ border-color: rgba(56,189,248,.7); color:#f8fafc; }}
 .kicker {{ color: #38bdf8; font-size: 11px; letter-spacing: .08em; font-weight: 800; }}
 .title {{ font-size: 22px; font-weight: 800; margin-top: 2px; }}
 .sub {{ color: #cbd5e1; font-size: 12px; margin-top: 3px; }}
@@ -489,9 +611,10 @@ requestAnimationFrame(draw);
 .legend {{ color:#cbd5e1; font-size: 12px; }}
 .legend i {{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; box-shadow:0 0 12px currentColor; }}
 @media (max-width: 760px) {{
-  #model-core-root {{ height: 620px; border-radius: 12px; }}
+  #model-core-root {{ height: 720px; border-radius: 12px; }}
   .top-right {{ left: 16px; right: auto; top: 112px; }}
-  .bottom-right {{ left: 16px; right: 16px; text-align: left; }}
+  .detail-card {{ left: 16px; right: 16px; width:auto; }}
+  .controls {{ bottom: 168px; }}
 }}
 </style>
 """
@@ -1037,7 +1160,7 @@ elif page == "🧬 Model Internals":
         index=0,
         help="Changes which internal layer is emphasized in the spatial scene.",
     )
-    visual_height = int(vc2.slider("Viewport Height", 560, 860, 720, 20))
+    visual_height = int(vc2.slider("Viewport Height", 760, 1120, 940, 20))
     render_now = vc3.button("Render Digital Core", type="primary", disabled=internals_bytes is None)
 
     if internals_bytes is not None:
